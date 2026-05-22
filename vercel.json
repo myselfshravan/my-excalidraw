@@ -4,10 +4,6 @@
       "source": "/(.*)",
       "headers": [
         {
-          "key": "Access-Control-Allow-Origin",
-          "value": "https://excalidraw.com"
-        },
-        {
           "key": "X-Content-Type-Options",
           "value": "nosniff"
         },
@@ -30,7 +26,7 @@
         },
         {
           "key": "Access-Control-Allow-Origin",
-          "value": "https://excalidraw.com"
+          "value": "*"
         }
       ]
     },
@@ -46,22 +42,6 @@
           "value": "*"
         }
       ]
-    }
-  ],
-  "redirects": [
-    {
-      "source": "/webex/:match*",
-      "destination": "https://for-webex.excalidraw.com"
-    },
-    {
-      "source": "/:path*",
-      "has": [
-        {
-          "type": "host",
-          "value": "vscode.excalidraw.com"
-        }
-      ],
-      "destination": "https://marketplace.visualstudio.com/items?itemName=pomdtr.excalidraw-editor"
     }
   ],
   "outputDirectory": "excalidraw-app/build",
