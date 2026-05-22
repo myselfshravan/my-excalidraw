@@ -84,6 +84,30 @@ export const loadFirebaseStorage = async () => {
   return _getStorage();
 };
 
+export const saveSceneToFirebase = async (
+  id: string,
+  buffer: ArrayBuffer,
+) => {
+  const storage = await loadFirebaseStorage();
+  const storageRef = ref(storage, `files/shareLinks/${id}/scene`);
+  await uploadBytes(storageRef, new Uint8Array(buffer), {
+    cacheControl: `public, max-age=${FILE_CACHE_MAX_AGE_SEC}`,
+  });
+};
+
+export const loadSceneFromFirebase = async (
+  id: string,
+): Promise<ArrayBuffer | null> => {
+  const url = `https://firebasestorage.googleapis.com/v0/b/${
+    FIREBASE_CONFIG.storageBucket
+  }/o/files%2FshareLinks%2F${encodeURIComponent(id)}%2Fscene?alt=media`;
+  const response = await fetch(url);
+  if (!response.ok) {
+    return null;
+  }
+  return response.arrayBuffer();
+};
+
 type FirebaseStoredScene = {
   sceneVersion: number;
   iv: Bytes;

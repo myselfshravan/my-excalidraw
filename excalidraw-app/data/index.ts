@@ -36,7 +36,11 @@ import {
 } from "../app_constants";
 
 import { encodeFilesForUpload } from "./FileManager";
-import { saveFilesToFirebase } from "./firebase";
+import {
+  loadSceneFromFirebase,
+  saveFilesToFirebase,
+  saveSceneToFirebase,
+} from "./firebase";
 
 import type { WS_SUBTYPES } from "../app_constants";
 
@@ -62,14 +66,13 @@ export const getSyncableElements = (
     isSyncableElement(element),
   ) as SyncableExcalidrawElement[];
 
-const BACKEND_V2_GET = import.meta.env.VITE_APP_BACKEND_V2_GET_URL;
-const BACKEND_V2_POST = import.meta.env.VITE_APP_BACKEND_V2_POST_URL;
-
 const generateRoomId = async () => {
   const buffer = new Uint8Array(ROOM_ID_BYTES);
   window.crypto.getRandomValues(buffer);
   return bytesToHexString(buffer);
 };
+
+const generateSceneId = generateRoomId;
 
 export type EncryptedData = {
   data: ArrayBuffer;
@@ -204,13 +207,12 @@ export const importFromBackend = async (
   decryptionKey: string,
 ): Promise<ImportedDataState> => {
   try {
-    const response = await fetch(`${BACKEND_V2_GET}${id}`);
+    const buffer = await loadSceneFromFirebase(id);
 
-    if (!response.ok) {
+    if (!buffer) {
       window.alert(t("alerts.importBackendFailed"));
       return {};
     }
-    const buffer = await response.arrayBuffer();
 
     try {
       const { data: decodedBuffer } = await decompressData(
@@ -273,32 +275,21 @@ export const exportToBackend = async (
       maxBytes: FILE_UPLOAD_MAX_BYTES,
     });
 
-    const response = await fetch(BACKEND_V2_POST, {
-      method: "POST",
-      body: payload.buffer,
+    const id = await generateSceneId();
+    await saveSceneToFirebase(id, payload.buffer);
+
+    const url = new URL(window.location.href);
+    // We need to store the key (and less importantly the id) as hash instead
+    // of queryParam in order to never send it to the server
+    url.hash = `json=${id},${encryptionKey}`;
+    const urlString = url.toString();
+
+    await saveFilesToFirebase({
+      prefix: `/files/shareLinks/${id}`,
+      files: filesToUpload,
     });
-    const json = await response.json();
-    if (json.id) {
-      const url = new URL(window.location.href);
-      // We need to store the key (and less importantly the id) as hash instead
-      // of queryParam in order to never send it to the server
-      url.hash = `json=${json.id},${encryptionKey}`;
-      const urlString = url.toString();
 
-      await saveFilesToFirebase({
-        prefix: `/files/shareLinks/${json.id}`,
-        files: filesToUpload,
-      });
-
-      return { url: urlString, errorMessage: null };
-    } else if (json.error_class === "RequestTooLargeError") {
-      return {
-        url: null,
-        errorMessage: t("alerts.couldNotCreateShareableLinkTooBig"),
-      };
-    }
-
-    return { url: null, errorMessage: t("alerts.couldNotCreateShareableLink") };
+    return { url: urlString, errorMessage: null };
   } catch (error: any) {
     console.error(error);
 
