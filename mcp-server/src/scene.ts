@@ -122,6 +122,30 @@ export const decryptScenePayload = async (
   return new TextDecoder().decode(contentsBuffer);
 };
 
+// Mints an AES-GCM 128-bit key in the same JWK 'k' format the Excalidraw web
+// app stores in the URL fragment (#json=id,key).
+export const generateEncryptionKey = async (): Promise<string> => {
+  const key = await globalThis.crypto.subtle.generateKey(
+    { name: "AES-GCM", length: 128 },
+    true,
+    ["encrypt", "decrypt"],
+  );
+  const jwk = await globalThis.crypto.subtle.exportKey("jwk", key);
+  if (!jwk.k) {
+    throw new Error("failed to export AES key");
+  }
+  return jwk.k;
+};
+
+// 20-char hex id matching the app's ROOM_ID_BYTES (10).
+export const generateShareId = (): string => {
+  const buf = new Uint8Array(10);
+  globalThis.crypto.getRandomValues(buf);
+  return Array.from(buf)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+};
+
 const sceneStoragePath = (id: string) => `files/shareLinks/${id}/scene`;
 
 export const downloadScene = async (id: string): Promise<Uint8Array> => {

@@ -67,6 +67,28 @@ export const deleteWorkspace = async (name: string): Promise<void> => {
   await collection().doc(docId(name)).delete();
 };
 
+export const renameWorkspace = async (
+  currentName: string,
+  newName: string,
+  fields: { shareId: string; encryptionKey: string },
+): Promise<WorkspaceEntry> => {
+  // Doc IDs are derived from the name — moving the entry requires write-new
+  // then delete-old.
+  const newDocId = docId(newName);
+  await collection().doc(newDocId).set({
+    name: newName,
+    shareId: fields.shareId,
+    encryptionKey: fields.encryptionKey,
+    createdAt: FieldValue.serverTimestamp(),
+    updatedAt: FieldValue.serverTimestamp(),
+  });
+  if (docId(currentName) !== newDocId) {
+    await collection().doc(docId(currentName)).delete();
+  }
+  const snap = await collection().doc(newDocId).get();
+  return readEntry(snap)!;
+};
+
 export const touchWorkspace = async (name: string): Promise<void> => {
   await collection().doc(docId(name)).update({
     updatedAt: FieldValue.serverTimestamp(),
