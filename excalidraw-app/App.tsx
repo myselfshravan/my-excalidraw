@@ -112,6 +112,7 @@ import {
   getCollaborationLinkData,
   importFromBackend,
   isCollaborationLink,
+  updateShareLinkScene,
 } from "./data";
 
 import { updateStaleImageStatuses } from "./data/FileManager";
@@ -395,6 +396,14 @@ const ExcalidrawWrapper = () => {
 
   const debugCanvasRef = useRef<HTMLCanvasElement>(null);
 
+  // Active share-link auto-save: when a scene is loaded from a #json=id,key
+  // URL, we keep saving edits back to the same Firebase Storage path so the
+  // shared link behaves like a persistent workspace.
+  const shareLinkRef = useRef<{ id: string; key: string } | null>(null);
+  const shareLinkSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+
   useEffect(() => {
     trackEvent("load", "frame", getFrame());
     // Delayed so that the app has a time to load the latest SW
@@ -469,6 +478,9 @@ const ExcalidrawWrapper = () => {
           }, [] as FileId[]) || [];
 
         if (data.isExternalScene) {
+          // remember this share link so subsequent edits get auto-saved back
+          // to the same storage path
+          shareLinkRef.current = { id: data.id, key: data.key };
           if (fileIds.length) {
             // Direct Firebase call (not through FileManager), so track manually
             FileStatusStore.updateStatuses(
@@ -724,6 +736,22 @@ const ExcalidrawWrapper = () => {
         window.devicePixelRatio,
       );
     }
+
+    // Auto-save edits back to the active share link (workspace) — debounced.
+    if (shareLinkRef.current && !collabAPI?.isCollaborating()) {
+      if (shareLinkSaveTimerRef.current) {
+        clearTimeout(shareLinkSaveTimerRef.current);
+      }
+      shareLinkSaveTimerRef.current = setTimeout(() => {
+        const link = shareLinkRef.current;
+        if (!link) {
+          return;
+        }
+        updateShareLinkScene(link.id, link.key, elements, appState, files).catch(
+          (error) => console.error("share link auto-save failed", error),
+        );
+      }, 2000);
+    }
   };
 
   const [latestShareableLink, setLatestShareableLink] = useState<string | null>(
@@ -756,6 +784,13 @@ const ExcalidrawWrapper = () => {
 
       if (url) {
         setLatestShareableLink(url);
+        // start auto-saving subsequent edits back to this share link
+        const match = new URL(url).hash.match(
+          /^#json=([a-zA-Z0-9_-]+),([a-zA-Z0-9_-]+)$/,
+        );
+        if (match) {
+          shareLinkRef.current = { id: match[1], key: match[2] };
+        }
       }
     } catch (error: any) {
       if (error.name !== "AbortError") {

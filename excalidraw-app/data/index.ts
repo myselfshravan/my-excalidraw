@@ -296,3 +296,21 @@ export const exportToBackend = async (
     return { url: null, errorMessage: t("alerts.couldNotCreateShareableLink") };
   }
 };
+
+// Re-uploads an existing share link's scene blob using the same id + encryption key.
+// Used for auto-saving the scene back to its share link (workspace-like behavior).
+export const updateShareLinkScene = async (
+  id: string,
+  encryptionKey: string,
+  elements: readonly ExcalidrawElement[],
+  appState: Partial<AppState>,
+  files: BinaryFiles,
+): Promise<void> => {
+  const payload = await compressData(
+    new TextEncoder().encode(
+      serializeAsJSON(elements, appState, files, "database"),
+    ),
+    { encryptionKey },
+  );
+  await saveSceneToFirebase(id, payload.buffer);
+};
