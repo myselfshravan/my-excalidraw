@@ -84,6 +84,8 @@ export const loadFirebaseStorage = async () => {
   return _getStorage();
 };
 
+export const getAppFirestore = () => _getFirestore();
+
 export const saveSceneToFirebase = async (
   id: string,
   buffer: ArrayBuffer,

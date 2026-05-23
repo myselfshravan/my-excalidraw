@@ -297,6 +297,20 @@ export const exportToBackend = async (
   }
 };
 
+export const createEmptyShareLink = async (): Promise<{
+  id: string;
+  key: string;
+}> => {
+  const encryptionKey = await generateEncryptionKey("string");
+  const payload = await compressData(
+    new TextEncoder().encode(serializeAsJSON([], {}, {}, "database")),
+    { encryptionKey },
+  );
+  const id = await generateSceneId();
+  await saveSceneToFirebase(id, payload.buffer);
+  return { id, key: encryptionKey };
+};
+
 // Re-uploads an existing share link's scene blob using the same id + encryption key.
 // Used for auto-saving the scene back to its share link (workspace-like behavior).
 export const updateShareLinkScene = async (

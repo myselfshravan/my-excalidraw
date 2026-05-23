@@ -1,6 +1,13 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    // Workspace registry shared with the MCP server. Listing is required so
+    // the app can populate a workspace switcher. When auth is added later,
+    // tighten these with `request.auth.uid == resource.data.ownerUid`.
+    match /mcp_workspaces/{wsId} {
+      allow get, list, write: if true;
+    }
+
     match /{document=**} {
       allow get, write: if true;
       // never set this to true, otherwise anyone can delete anyone else's drawing.

@@ -108,12 +108,18 @@ import {
 import { TopErrorBoundary } from "./components/TopErrorBoundary";
 
 import {
+  createEmptyShareLink,
   exportToBackend,
   getCollaborationLinkData,
   importFromBackend,
   isCollaborationLink,
   updateShareLinkScene,
 } from "./data";
+import {
+  buildShareLinkUrl,
+  ensureWorkspaceRegistered,
+  type Workspace,
+} from "./data/workspaces";
 
 import { updateStaleImageStatuses } from "./data/FileManager";
 import { FileStatusStore } from "./data/fileStatusStore";
@@ -280,7 +286,10 @@ const initializeScene = async (opts: {
         };
       }
       scene.scrollToContent = true;
-      if (!roomLinkData) {
+      // Preserve `#json=id,key` so the workspace stays addressable (bookmark,
+      // refresh, share between devices). Other one-shot loads (`#url=`, the
+      // legacy `?id=`) still get stripped below.
+      if (!roomLinkData && !jsonBackendMatch) {
         window.history.replaceState({}, APP_NAME, window.location.origin);
       }
     } else {
@@ -403,6 +412,23 @@ const ExcalidrawWrapper = () => {
   const shareLinkSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
   );
+  const [currentWorkspace, setCurrentWorkspace] = useState<Workspace | null>(
+    null,
+  );
+
+  // Registration failures are non-fatal — auto-save still works in memory.
+  const adoptShareLink = useCallback(
+    async (id: string, key: string, defaultName?: string) => {
+      shareLinkRef.current = { id, key };
+      try {
+        const ws = await ensureWorkspaceRegistered(id, key, defaultName);
+        setCurrentWorkspace(ws);
+      } catch (error) {
+        console.warn("workspace registry unavailable", error);
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
     trackEvent("load", "frame", getFrame());
@@ -478,9 +504,7 @@ const ExcalidrawWrapper = () => {
           }, [] as FileId[]) || [];
 
         if (data.isExternalScene) {
-          // remember this share link so subsequent edits get auto-saved back
-          // to the same storage path
-          shareLinkRef.current = { id: data.id, key: data.key };
+          adoptShareLink(data.id, data.key);
           if (fileIds.length) {
             // Direct Firebase call (not through FileManager), so track manually
             FileStatusStore.updateStatuses(
@@ -789,7 +813,7 @@ const ExcalidrawWrapper = () => {
           /^#json=([a-zA-Z0-9_-]+),([a-zA-Z0-9_-]+)$/,
         );
         if (match) {
-          shareLinkRef.current = { id: match[1], key: match[2] };
+          adoptShareLink(match[1], match[2]);
         }
       }
     } catch (error: any) {
@@ -826,6 +850,55 @@ const ExcalidrawWrapper = () => {
     () => setShareDialogState({ isOpen: true, type: "collaborationOnly" }),
     [setShareDialogState],
   );
+
+  // Switching/creating navigates to a new URL (full reload guarantees a clean
+  // scene + collab state).
+  const flushPendingShareLinkSave = useCallback(() => {
+    if (shareLinkSaveTimerRef.current) {
+      clearTimeout(shareLinkSaveTimerRef.current);
+      shareLinkSaveTimerRef.current = null;
+    }
+  }, []);
+
+  const workspaceController = {
+    current: currentWorkspace,
+    switchTo: useCallback(
+      (ws: Workspace) => {
+        flushPendingShareLinkSave();
+        window.location.href = buildShareLinkUrl(ws.shareId, ws.encryptionKey);
+      },
+      [flushPendingShareLinkSave],
+    ),
+    createNew: useCallback(async () => {
+      flushPendingShareLinkSave();
+      const { id, key } = await createEmptyShareLink();
+      window.location.href = buildShareLinkUrl(id, key);
+    }, [flushPendingShareLinkSave]),
+    rename: useCallback(
+      async (ws: Workspace, newName: string) => {
+        const { renameWorkspace } = await import("./data/workspaces");
+        const updated = await renameWorkspace(ws.name, newName, {
+          shareId: ws.shareId,
+          encryptionKey: ws.encryptionKey,
+        });
+        if (currentWorkspace?.docId === ws.docId) {
+          setCurrentWorkspace(updated);
+        }
+        return updated;
+      },
+      [currentWorkspace],
+    ),
+    remove: useCallback(
+      async (ws: Workspace) => {
+        const { removeWorkspace } = await import("./data/workspaces");
+        await removeWorkspace(ws.docId);
+        if (currentWorkspace?.docId === ws.docId) {
+          setCurrentWorkspace(null);
+        }
+      },
+      [currentWorkspace],
+    ),
+  };
 
   // ---------------------------------------------------------------------------
   // onExport — intercepts file save to wait for pending image loads
@@ -1028,6 +1101,7 @@ const ExcalidrawWrapper = () => {
           isCollabEnabled={!isCollabDisabled}
           theme={appTheme}
           refresh={() => forceRefresh((prev) => !prev)}
+          workspaceController={workspaceController}
         />
         <AppWelcomeScreen
           onCollabDialogOpen={onCollabDialogOpen}

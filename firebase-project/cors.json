@@ -1,0 +1,19 @@
+[
+  {
+    "origin": [
+      "https://my-excalidraw-six.vercel.app",
+      "https://*.vercel.app",
+      "http://localhost:3000",
+      "http://localhost:5173"
+    ],
+    "method": ["GET", "HEAD", "PUT", "POST"],
+    "maxAgeSeconds": 3600,
+    "responseHeader": [
+      "Content-Type",
+      "Content-Length",
+      "Content-Encoding",
+      "Cache-Control",
+      "x-goog-meta-*"
+    ]
+  }
+]
