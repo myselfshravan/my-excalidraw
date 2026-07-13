@@ -254,10 +254,25 @@ const initializeScene = async (opts: {
 
   let roomLinkData = getCollaborationLinkData(window.location.href);
   const isExternalScene = !!(id || jsonBackendMatch || roomLinkData);
+
+  // Helper function to detect if scene is truly empty (no user content)
+  const isSceneEmpty = (elements: OrderedExcalidrawElement[]) => {
+    if (!elements.length) return true;
+    // Check if all elements are just empty rects/text with no real content
+    return elements.every(el =>
+      el.type === 'rectangle' &&
+      el.width === 100 &&
+      el.height === 100 &&
+      el.fillStyle === 'solid' &&
+      el.strokeWidth === 2 &&
+      Object.keys(el).length <= 8 // Minimal properties suggest default/placeholder
+    );
+  };
+
   if (isExternalScene) {
     if (
-      // don't prompt if scene is empty
-      !scene.elements.length ||
+      // don't prompt if scene is empty or has only default elements
+      isSceneEmpty(scene.elements) ||
       // don't prompt for collab scenes because we don't override local storage
       roomLinkData ||
       // otherwise, prompt whether user wants to override current scene
@@ -316,8 +331,21 @@ const initializeScene = async (opts: {
     try {
       const request = await fetch(window.decodeURIComponent(url));
       const data = await loadFromBlob(await request.blob(), null, null);
+
+      // Helper function to detect if scene is truly empty (no user content)
+      const isSceneEmptyExternal = (elements: any[]) => {
+        if (!elements.length) return true;
+        return elements.every(el =>
+          el.type === 'rectangle' &&
+          el.width === 100 &&
+          el.height === 100 &&
+          el.fillStyle === 'solid' &&
+          el.strokeWidth === 2
+        );
+      };
+
       if (
-        !scene.elements.length ||
+        isSceneEmptyExternal(scene.elements) ||
         (await openConfirmModal(shareableLinkConfirmDialog))
       ) {
         return { scene: data, isExternalScene };
