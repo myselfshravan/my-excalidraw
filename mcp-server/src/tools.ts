@@ -8,6 +8,7 @@ import {
   createLine,
   createRectangle,
   createText,
+  ensureTextElementBounds,
 } from "./elements.js";
 import {
   deleteWorkspace,
@@ -203,11 +204,12 @@ export const registerTools = (server: McpServer) => {
     },
     async ({ name, elements, appState }) => {
       const { shareId, encryptionKey } = await loadScene(name);
+      const normalizedElements = elements.map(ensureTextElementBounds);
       const scene = {
         type: "excalidraw",
         version: 2,
         source: "my-excalidraw-mcp",
-        elements,
+        elements: normalizedElements,
         appState: appState ?? {},
       };
       await saveScene(name, scene, shareId, encryptionKey);
@@ -215,7 +217,7 @@ export const registerTools = (server: McpServer) => {
         ok: true,
         name,
         url: workspaceUrl(shareId, encryptionKey),
-        elementCount: elements.length,
+        elementCount: normalizedElements.length,
       });
     },
   );

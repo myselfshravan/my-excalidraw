@@ -93,20 +93,56 @@ export type TextArgs = {
   verticalAlign?: "top" | "middle" | "bottom";
 } & BaseElementOptions;
 
-// Rough text width heuristic so the element has plausible bounding box; the
-// app re-measures on load.
-const estimateTextSize = (text: string, fontSize: number) => {
+// Rough text width heuristic so the element has a plausible bounding box.
+// The app may re-measure it more precisely when the text is edited.
+const estimateTextSize = (
+  text: string,
+  fontSize: number,
+  lineHeight = 1.25,
+) => {
   const lines = text.split("\n");
   const longest = lines.reduce((acc, l) => Math.max(acc, l.length), 0);
   return {
     width: Math.max(20, Math.ceil(longest * fontSize * 0.6)),
-    height: Math.max(fontSize * 1.25, lines.length * fontSize * 1.25),
+    height: Math.max(fontSize * lineHeight, lines.length * fontSize * lineHeight),
   };
+};
+
+type ElementLike = Record<string, unknown>;
+
+const isPositiveFiniteNumber = (value: unknown): value is number =>
+  typeof value === "number" && Number.isFinite(value) && value > 0;
+
+/**
+ * Gives imported text elements usable bounds when callers omit them or pass
+ * invalid values. Valid bounds are preserved so `replace_workspace` remains a
+ * lossless replacement for correctly formed Excalidraw scenes.
+ */
+export const ensureTextElementBounds = <T extends ElementLike>(element: T): T => {
+  if (
+    element.type !== "text" ||
+    (isPositiveFiniteNumber(element.width) &&
+      isPositiveFiniteNumber(element.height))
+  ) {
+    return element;
+  }
+
+  const text = typeof element.text === "string" ? element.text : "";
+  const fontSize = isPositiveFiniteNumber(element.fontSize)
+    ? element.fontSize
+    : 20;
+  const lineHeight = isPositiveFiniteNumber(element.lineHeight)
+    ? element.lineHeight
+    : 1.25;
+  const { width, height } = estimateTextSize(text, fontSize, lineHeight);
+
+  return { ...element, width, height };
 };
 
 export const createText = (args: TextArgs) => {
   const fontSize = args.fontSize ?? 20;
-  const { width, height } = estimateTextSize(args.text, fontSize);
+  const lineHeight = 1.25;
+  const { width, height } = estimateTextSize(args.text, fontSize, lineHeight);
   return {
     type: "text" as const,
     ...baseDefaults(args),
@@ -122,7 +158,7 @@ export const createText = (args: TextArgs) => {
     containerId: null,
     originalText: args.text,
     autoResize: true,
-    lineHeight: 1.25,
+    lineHeight,
   };
 };
 
