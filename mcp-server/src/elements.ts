@@ -200,7 +200,7 @@ export const createArrow = (
 };
 
 export type LineArgs = {
-  points: [number, number][];
+  points: number[][];
   x?: number;
   y?: number;
 } & BaseElementOptions;

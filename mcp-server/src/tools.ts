@@ -364,7 +364,7 @@ export const registerTools = (server: McpServer) => {
     {
       name: z.string().min(1),
       points: z
-        .array(z.tuple([z.number(), z.number()]))
+        .array(z.array(z.number()))
         .min(2)
         .describe("Array of [x, y] points; first point is the line's origin"),
       ...baseElementOptions,
