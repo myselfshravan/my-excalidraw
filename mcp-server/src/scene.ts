@@ -160,7 +160,10 @@ export const uploadScene = async (
   await bucket.file(sceneStoragePath(id)).save(Buffer.from(buffer), {
     contentType: "application/octet-stream",
     metadata: {
-      cacheControl: "public, max-age=31536000",
+      // Scene blobs are mutable (each edit overwrites the same path), so they
+      // must revalidate on every request. A long max-age here would let stale
+      // scenes linger in the browser/edge cache.
+      cacheControl: "no-cache, max-age=0, must-revalidate",
     },
   });
 };

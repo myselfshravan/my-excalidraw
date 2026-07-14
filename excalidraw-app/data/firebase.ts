@@ -86,14 +86,13 @@ export const loadFirebaseStorage = async () => {
 
 export const getAppFirestore = () => _getFirestore();
 
-export const saveSceneToFirebase = async (
-  id: string,
-  buffer: ArrayBuffer,
-) => {
+export const saveSceneToFirebase = async (id: string, buffer: ArrayBuffer) => {
   const storage = await loadFirebaseStorage();
   const storageRef = ref(storage, `files/shareLinks/${id}/scene`);
   await uploadBytes(storageRef, new Uint8Array(buffer), {
-    cacheControl: `public, max-age=${FILE_CACHE_MAX_AGE_SEC}`,
+    // Share scenes are overwritten at a stable path, so a long-lived response
+    // cache could make clients load an earlier version of the drawing.
+    cacheControl: "no-cache, max-age=0, must-revalidate",
   });
 };
 
@@ -103,7 +102,11 @@ export const loadSceneFromFirebase = async (
   const url = `https://firebasestorage.googleapis.com/v0/b/${
     FIREBASE_CONFIG.storageBucket
   }/o/files%2FshareLinks%2F${encodeURIComponent(id)}%2Fscene?alt=media`;
-  const response = await fetch(url);
+  // Share-link scene blobs are mutable (every edit re-uploads to the same
+  // path), so they must not be served from the browser/edge HTTP cache —
+  // otherwise stale scenes (e.g. an earlier zero-bounds write) linger for up
+  // to a year per the upload cacheControl. Force a fresh fetch every load.
+  const response = await fetch(url, { cache: "no-store" });
   if (!response.ok) {
     return null;
   }

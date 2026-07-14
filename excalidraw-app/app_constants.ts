@@ -42,6 +42,12 @@ export const STORAGE_KEYS = {
   LOCAL_STORAGE_COLLAB: "excalidraw-collab",
   LOCAL_STORAGE_THEME: "excalidraw-theme",
   LOCAL_STORAGE_DEBUG: "excalidraw-debug",
+  // Snapshot of the scene taken just before a #json= workspace link replaces
+  // it, so a direct load never silently destroys unsaved local work. Each
+  // workspace is also persisted to its own Firebase share link, so this is a
+  // belt-and-suspenders undo path rather than the only copy.
+  LOCAL_STORAGE_ELEMENTS_BACKUP: "excalidraw-backup",
+  LOCAL_STORAGE_APP_STATE_BACKUP: "excalidraw-state-backup",
   VERSION_DATA_STATE: "version-dataState",
   VERSION_FILES: "version-files",
 

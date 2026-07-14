@@ -126,6 +126,7 @@ import { FileStatusStore } from "./data/fileStatusStore";
 import {
   importFromLocalStorage,
   importUsernameFromLocalStorage,
+  backupLocalScene,
 } from "./data/localStorage";
 
 import { loadFilesFromFirebase } from "./data/firebase";
@@ -270,7 +271,18 @@ const initializeScene = async (opts: {
   };
 
   if (isExternalScene) {
+    // Workspace share links (#json=id,key) are first-class, addressable
+    // documents in this fork — each one auto-persists to its own Firebase
+    // share link. So opening one should load directly instead of prompting.
+    // We snapshot local storage first so unsaved local work is never lost
+    // (belt-and-suspenders undo path). If the snapshot can't be written
+    // (private mode / quota), fall back to the safe prompt.
+    const workspaceLink = !!jsonBackendMatch;
+    const autoLoadWorkspace =
+      workspaceLink && (isSceneEmpty(scene.elements) || backupLocalScene());
+
     if (
+      autoLoadWorkspace ||
       // don't prompt if scene is empty or has only default elements
       isSceneEmpty(scene.elements) ||
       // don't prompt for collab scenes because we don't override local storage

@@ -73,6 +73,30 @@ export const importFromLocalStorage = () => {
   return { elements, appState };
 };
 
+// Snapshot the current scene into the backup keys. Called just before a
+// #json= workspace link replaces local storage, so a direct (no-prompt) load
+// can never silently destroy unsaved work. Returns true unless localStorage is
+// unwritable (private mode / quota), in which case the caller should keep
+// prompting to be safe.
+export const backupLocalScene = (): boolean => {
+  try {
+    const elements = localStorage.getItem(STORAGE_KEYS.LOCAL_STORAGE_ELEMENTS);
+    const appState = localStorage.getItem(STORAGE_KEYS.LOCAL_STORAGE_APP_STATE);
+    localStorage.setItem(
+      STORAGE_KEYS.LOCAL_STORAGE_ELEMENTS_BACKUP,
+      elements ?? "[]",
+    );
+    localStorage.setItem(
+      STORAGE_KEYS.LOCAL_STORAGE_APP_STATE_BACKUP,
+      appState ?? "{}",
+    );
+    return true;
+  } catch (error: any) {
+    console.error("backupLocalScene failed", error);
+    return false;
+  }
+};
+
 export const getElementsStorageSize = () => {
   try {
     const elements = localStorage.getItem(STORAGE_KEYS.LOCAL_STORAGE_ELEMENTS);
