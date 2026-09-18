@@ -4,7 +4,10 @@ service firebase.storage {
     match /{files}/rooms/{room}/{file} {
     	allow get, write: if true;
     }
-    match /{files}/shareLinks/{shareLink}/{file} {
+    // `{file=**}` (not `{file}`) so version snapshots one level deeper —
+    // files/shareLinks/<id>/versions/<n> — are covered too, not just
+    // files/shareLinks/<id>/scene.
+    match /{files}/shareLinks/{shareLink}/{file=**} {
     	allow get, write: if true;
     }
   }

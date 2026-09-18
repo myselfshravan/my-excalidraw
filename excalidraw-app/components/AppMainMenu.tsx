@@ -3,6 +3,7 @@ import {
   ExcalLogo,
   eyeIcon,
   LibraryIcon,
+  historyIcon,
   PlusIcon,
   TrashIcon,
   LinkIcon,
@@ -28,6 +29,8 @@ import { saveDebugState } from "./DebugCanvas";
 
 export type WorkspaceController = {
   current: Workspace | null;
+  /** Undefined until a share link is adopted — nothing to show history for. */
+  openVersionHistory?: () => void;
   switchTo: (ws: Workspace) => void;
   createNew: () => Promise<void>;
   rename: (ws: Workspace, newName: string) => Promise<Workspace>;
@@ -158,6 +161,17 @@ const WorkspacesSubmenu: React.FC<{ controller: WorkspaceController }> = ({
         <MainMenu.Item icon={LinkIcon} onSelect={onOpenByLink}>
           Open by link…
         </MainMenu.Item>
+        {controller.openVersionHistory && (
+          <>
+            <MainMenu.Separator />
+            <MainMenu.Item
+              icon={historyIcon}
+              onSelect={controller.openVersionHistory}
+            >
+              Version history…
+            </MainMenu.Item>
+          </>
+        )}
         {controller.current && (
           <>
             <MainMenu.Separator />

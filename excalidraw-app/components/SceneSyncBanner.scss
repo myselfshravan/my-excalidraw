@@ -1,0 +1,60 @@
+.SceneSyncBanner {
+  position: fixed;
+  top: 0.75rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 100;
+
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+
+  max-width: min(36rem, calc(100vw - 2rem));
+  padding: 0.625rem 0.75rem 0.625rem 1rem;
+
+  border: 1px solid var(--color-warning-dark, #f08c00);
+  border-radius: 0.5rem;
+  background: var(--island-bg-color, #fff);
+  box-shadow: 0 4px 16px rgb(0 0 0 / 18%);
+  color: var(--text-primary-color, #1b1b1f);
+  font-size: 0.8125rem;
+  line-height: 1.35;
+
+  &__text {
+    display: flex;
+    flex-direction: column;
+    gap: 0.125rem;
+    min-width: 0;
+  }
+
+  &__actions {
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+    flex-shrink: 0;
+
+    button {
+      padding: 0.3rem 0.6rem;
+      border: 1px solid var(--default-border-color, #d6d6d6);
+      border-radius: 0.375rem;
+      background: var(--button-gray-1, #f5f5f5);
+      color: inherit;
+      font-size: 0.75rem;
+      font-family: inherit;
+      cursor: pointer;
+
+      &:hover:not(:disabled) {
+        background: var(--button-gray-2, #ebebeb);
+      }
+
+      &:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+    }
+  }
+
+  &__dismiss {
+    padding: 0.3rem 0.45rem !important;
+  }
+}

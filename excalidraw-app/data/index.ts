@@ -15,6 +15,7 @@ import { bytesToHexString } from "@excalidraw/common";
 
 import type { UserIdleState } from "@excalidraw/common";
 import type { ImportedDataState } from "@excalidraw/excalidraw/data/types";
+
 import type { SceneBounds } from "@excalidraw/element";
 import type {
   ExcalidrawElement,
@@ -35,11 +36,15 @@ import {
   ROOM_ID_BYTES,
 } from "../app_constants";
 
+import { commitSceneVersion } from "./sceneVersions";
+
 import { encodeFilesForUpload } from "./FileManager";
 import {
   loadSceneFromFirebase,
   saveFilesToFirebase,
   saveSceneToFirebase,
+  saveSceneVersionToFirebase,
+  loadSceneVersionFromFirebase,
 } from "./firebase";
 
 import type { WS_SUBTYPES } from "../app_constants";
@@ -313,18 +318,70 @@ export const createEmptyShareLink = async (): Promise<{
 
 // Re-uploads an existing share link's scene blob using the same id + encryption key.
 // Used for auto-saving the scene back to its share link (workspace-like behavior).
+/**
+ * Writes a new version of a share-link scene.
+ *
+ * `baseVersion` is the version this edit was computed from. If anything has
+ * been written since — another tab, or the MCP server — this throws
+ * SceneVersionConflictError instead of overwriting, and the caller is expected
+ * to reload rather than clobber. Returns the newly committed version.
+ *
+ * The snapshot blob is uploaded BEFORE the version is committed, so a
+ * committed version always has content behind it; a failed commit just leaves
+ * an unreferenced blob.
+ */
 export const updateShareLinkScene = async (
   id: string,
   encryptionKey: string,
   elements: readonly ExcalidrawElement[],
   appState: Partial<AppState>,
   files: BinaryFiles,
-): Promise<void> => {
+  baseVersion: number,
+  label?: string,
+): Promise<number> => {
   const payload = await compressData(
     new TextEncoder().encode(
       serializeAsJSON(elements, appState, files, "database"),
     ),
     { encryptionKey },
   );
+  const next = baseVersion + 1;
+  // Best-effort: the immutable snapshot only powers history and restore. If
+  // it fails (e.g. storage rules not yet widened to the versions/ path), the
+  // conflict protection below must still work — losing history is far less
+  // bad than losing the ability to detect a concurrent write.
+  try {
+    await saveSceneVersionToFirebase(id, next, payload.buffer);
+  } catch (error) {
+    console.warn(
+      "version snapshot upload failed; history may be incomplete",
+      error,
+    );
+  }
+  const committed = await commitSceneVersion(
+    id,
+    baseVersion,
+    elements.length,
+    label,
+  );
+  // Only now move the pointer that loads by default.
   await saveSceneToFirebase(id, payload.buffer);
+  return committed;
+};
+
+/** Decrypts one historical snapshot without making it current. */
+export const loadShareLinkVersion = async (
+  id: string,
+  encryptionKey: string,
+  version: number,
+): Promise<ImportedDataState | null> => {
+  const buffer = await loadSceneVersionFromFirebase(id, version);
+  if (!buffer) {
+    return null;
+  }
+  const { data } = await decompressData<{ data: Uint8Array }>(
+    new Uint8Array(buffer),
+    { decryptionKey: encryptionKey },
+  );
+  return JSON.parse(new TextDecoder().decode(data));
 };

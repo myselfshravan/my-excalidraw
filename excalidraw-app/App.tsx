@@ -47,7 +47,7 @@ import {
   share,
   youtubeIcon,
 } from "@excalidraw/excalidraw/components/icons";
-import { isElementLink } from "@excalidraw/element";
+import { getSceneVersion, isElementLink } from "@excalidraw/element";
 import {
   bumpElementVersions,
   restoreAppState,
@@ -65,6 +65,7 @@ import type { RemoteExcalidrawElement } from "@excalidraw/excalidraw/data/reconc
 import type { RestoredDataState } from "@excalidraw/excalidraw/data/restore";
 import type {
   FileId,
+  ExcalidrawElement,
   NonDeletedExcalidrawElement,
   OrderedExcalidrawElement,
 } from "@excalidraw/element/types";
@@ -107,6 +108,8 @@ import {
   exportToExcalidrawPlus,
 } from "./components/ExportToExcalidrawPlus";
 import { TopErrorBoundary } from "./components/TopErrorBoundary";
+import { SceneSyncBanner } from "./components/SceneSyncBanner";
+import { VersionHistoryDialog } from "./components/VersionHistoryDialog";
 
 import {
   createEmptyShareLink,
@@ -114,8 +117,16 @@ import {
   getCollaborationLinkData,
   importFromBackend,
   isCollaborationLink,
+  loadShareLinkVersion,
   updateShareLinkScene,
 } from "./data";
+import {
+  ensureSceneVersionSeeded,
+  getCurrentSceneVersion,
+  SceneVersionConflictError,
+  watchSceneVersion,
+  type SceneSource,
+} from "./data/sceneVersions";
 import {
   buildShareLinkUrl,
   ensureWorkspaceRegistered,
@@ -432,10 +443,47 @@ const ExcalidrawWrapper = () => {
     null,
   );
 
+  // Version of the scene this tab's edits are based on. Every write presents
+  // it, and is refused if the stored version has moved on — that refusal is
+  // what stops a long-open tab from overwriting work done elsewhere.
+  const sceneVersionRef = useRef<number>(0);
+  // Excalidraw's own scene version (a checksum over element versions). Saving
+  // only when this actually changes keeps pans, zooms and selections — which
+  // all fire onChange — from re-uploading an unchanged scene.
+  const lastSavedSignatureRef = useRef<number | null>(null);
+  const latestSignatureRef = useRef<number | null>(null);
+  const [activeShareId, setActiveShareId] = useState<string | null>(null);
+  const [remoteChange, setRemoteChange] = useState<{
+    version: number;
+    updatedBy: SceneSource;
+  } | null>(null);
+  const [isReloading, setIsReloading] = useState(false);
+
   // Registration failures are non-fatal — auto-save still works in memory.
   const adoptShareLink = useCallback(
-    async (id: string, key: string, defaultName?: string) => {
+    async (
+      id: string,
+      key: string,
+      defaultName?: string,
+      loadedElements?: readonly ExcalidrawElement[],
+    ) => {
       shareLinkRef.current = { id, key };
+      setActiveShareId(id);
+      // Treat what we just loaded as already saved, so adopting a link never
+      // immediately re-uploads it.
+      if (loadedElements) {
+        const signature = getSceneVersion(loadedElements);
+        lastSavedSignatureRef.current = signature;
+        latestSignatureRef.current = signature;
+      }
+      try {
+        sceneVersionRef.current = await ensureSceneVersionSeeded(
+          id,
+          loadedElements?.length ?? 0,
+        );
+      } catch (error) {
+        console.warn("scene version unavailable", error);
+      }
       try {
         const ws = await ensureWorkspaceRegistered(id, key, defaultName);
         setCurrentWorkspace(ws);
@@ -445,6 +493,116 @@ const ExcalidrawWrapper = () => {
     },
     [],
   );
+
+  /** Pulls the current remote scene into the canvas, discarding local edits. */
+  const reloadFromRemote = useCallback(async () => {
+    const link = shareLinkRef.current;
+    if (!link || !excalidrawAPI) {
+      return;
+    }
+    setIsReloading(true);
+    try {
+      const data = await importFromBackend(link.id, link.key);
+      const elements = data.elements ?? [];
+      // Set the baseline before updateScene so the resulting onChange sees an
+      // unchanged signature and doesn't schedule a save of what we just read.
+      const signature = getSceneVersion(elements as any);
+      lastSavedSignatureRef.current = signature;
+      latestSignatureRef.current = signature;
+      sceneVersionRef.current = await getCurrentSceneVersion(link.id);
+      excalidrawAPI.updateScene({
+        elements,
+        captureUpdate: CaptureUpdateAction.IMMEDIATELY,
+      });
+      setRemoteChange(null);
+    } catch (error) {
+      console.error("reload from remote failed", error);
+    } finally {
+      setIsReloading(false);
+    }
+  }, [excalidrawAPI]);
+
+  /** Forces this tab's scene to win, rebasing onto whatever is stored now. */
+  const overwriteRemote = useCallback(async () => {
+    const link = shareLinkRef.current;
+    if (!link || !excalidrawAPI) {
+      return;
+    }
+    sceneVersionRef.current = await getCurrentSceneVersion(link.id);
+    const elements = excalidrawAPI.getSceneElementsIncludingDeleted();
+    try {
+      sceneVersionRef.current = await updateShareLinkScene(
+        link.id,
+        link.key,
+        elements,
+        excalidrawAPI.getAppState(),
+        excalidrawAPI.getFiles(),
+        sceneVersionRef.current,
+        "Overwrote remote changes",
+      );
+      lastSavedSignatureRef.current = getSceneVersion(elements);
+      setRemoteChange(null);
+    } catch (error) {
+      console.error("overwrite failed", error);
+    }
+  }, [excalidrawAPI]);
+
+  const [showVersionHistory, setShowVersionHistory] = useState(false);
+
+  /** Non-destructive: the old content is committed as a NEW version. */
+  const restoreVersion = useCallback(
+    async (version: number) => {
+      const link = shareLinkRef.current;
+      if (!link || !excalidrawAPI) {
+        return;
+      }
+      const snapshot = await loadShareLinkVersion(link.id, link.key, version);
+      if (!snapshot) {
+        throw new Error(`Version ${version} has no stored snapshot.`);
+      }
+      const elements = snapshot.elements ?? [];
+      sceneVersionRef.current = await getCurrentSceneVersion(link.id);
+      sceneVersionRef.current = await updateShareLinkScene(
+        link.id,
+        link.key,
+        elements,
+        excalidrawAPI.getAppState(),
+        excalidrawAPI.getFiles(),
+        sceneVersionRef.current,
+        `Restored version ${version}`,
+      );
+      const signature = getSceneVersion(elements);
+      lastSavedSignatureRef.current = signature;
+      latestSignatureRef.current = signature;
+      excalidrawAPI.updateScene({
+        elements,
+        captureUpdate: CaptureUpdateAction.IMMEDIATELY,
+      });
+      setRemoteChange(null);
+    },
+    [excalidrawAPI],
+  );
+
+  // Notice writes made elsewhere (another tab, or the MCP server). If this tab
+  // has nothing unsaved we just refresh; otherwise we ask, because refreshing
+  // would throw away local work.
+  useEffect(() => {
+    if (!activeShareId) {
+      return;
+    }
+    return watchSceneVersion(activeShareId, (version, updatedBy) => {
+      if (version <= sceneVersionRef.current) {
+        return;
+      }
+      const hasUnsavedLocal =
+        latestSignatureRef.current !== lastSavedSignatureRef.current;
+      if (hasUnsavedLocal) {
+        setRemoteChange({ version, updatedBy });
+      } else {
+        reloadFromRemote();
+      }
+    });
+  }, [activeShareId, reloadFromRemote]);
 
   useEffect(() => {
     trackEvent("load", "frame", getFrame());
@@ -556,7 +714,12 @@ const ExcalidrawWrapper = () => {
           }, [] as FileId[]) || [];
 
         if (data.isExternalScene) {
-          adoptShareLink(data.id, data.key);
+          adoptShareLink(
+            data.id,
+            data.key,
+            undefined,
+            data.scene.elements ?? undefined,
+          );
           if (fileIds.length) {
             // Direct Firebase call (not through FileManager), so track manually
             FileStatusStore.updateStatuses(
@@ -817,22 +980,44 @@ const ExcalidrawWrapper = () => {
 
     // Auto-save edits back to the active share link (workspace) — debounced.
     if (shareLinkRef.current && !collabAPI?.isCollaborating()) {
-      if (shareLinkSaveTimerRef.current) {
-        clearTimeout(shareLinkSaveTimerRef.current);
-      }
-      shareLinkSaveTimerRef.current = setTimeout(() => {
-        const link = shareLinkRef.current;
-        if (!link) {
-          return;
+      const signature = getSceneVersion(elements);
+      latestSignatureRef.current = signature;
+
+      // onChange also fires for appState-only updates (pan, zoom, selection,
+      // hover). Uploading on those would republish an unchanged scene and, if
+      // this tab were stale, clobber newer work for no reason at all.
+      if (signature !== lastSavedSignatureRef.current) {
+        if (shareLinkSaveTimerRef.current) {
+          clearTimeout(shareLinkSaveTimerRef.current);
         }
-        updateShareLinkScene(
-          link.id,
-          link.key,
-          elements,
-          appState,
-          files,
-        ).catch((error) => console.error("share link auto-save failed", error));
-      }, 2000);
+        shareLinkSaveTimerRef.current = setTimeout(async () => {
+          const link = shareLinkRef.current;
+          if (!link) {
+            return;
+          }
+          try {
+            sceneVersionRef.current = await updateShareLinkScene(
+              link.id,
+              link.key,
+              elements,
+              appState,
+              files,
+              sceneVersionRef.current,
+              "Edited in browser",
+            );
+            lastSavedSignatureRef.current = signature;
+            setRemoteChange(null);
+          } catch (error) {
+            if (error instanceof SceneVersionConflictError) {
+              // Someone else wrote first. Keep the local edits on canvas and
+              // let the user choose, rather than silently losing either side.
+              setRemoteChange({ version: error.actual, updatedBy: "mcp" });
+              return;
+            }
+            console.error("share link auto-save failed", error);
+          }
+        }, 2000);
+      }
     }
   };
 
@@ -920,6 +1105,9 @@ const ExcalidrawWrapper = () => {
 
   const workspaceController = {
     current: currentWorkspace,
+    openVersionHistory: activeShareId
+      ? () => setShowVersionHistory(true)
+      : undefined,
     switchTo: useCallback(
       (ws: Workspace) => {
         flushPendingShareLinkSave();
@@ -1163,6 +1351,24 @@ const ExcalidrawWrapper = () => {
           refresh={() => forceRefresh((prev) => !prev)}
           workspaceController={workspaceController}
         />
+        {remoteChange && (
+          <SceneSyncBanner
+            version={remoteChange.version}
+            updatedBy={remoteChange.updatedBy}
+            busy={isReloading}
+            onReload={reloadFromRemote}
+            onOverwrite={overwriteRemote}
+            onDismiss={() => setRemoteChange(null)}
+          />
+        )}
+        {showVersionHistory && activeShareId && (
+          <VersionHistoryDialog
+            shareId={activeShareId}
+            currentVersion={sceneVersionRef.current}
+            onRestore={restoreVersion}
+            onClose={() => setShowVersionHistory(false)}
+          />
+        )}
         <AppWelcomeScreen
           onCollabDialogOpen={onCollabDialogOpen}
           isCollabEnabled={!isCollabDisabled}

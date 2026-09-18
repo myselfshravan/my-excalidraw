@@ -21,12 +21,15 @@ import {
   renameWorkspace,
 } from "./registry.js";
 import {
+  decryptScenePayload,
+  downloadSceneVersion,
   encryptScenePayload,
   generateEncryptionKey,
   generateShareId,
   uploadScene,
 } from "./scene.js";
 import { loadScene, mutateScene, saveScene } from "./scene-ops.js";
+import { listVersions, VersionConflictError } from "./versions.js";
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
@@ -193,9 +196,27 @@ const buildElement = (
 };
 
 export const registerTools = (server: McpServer) => {
+  // Every tool goes through here so a lost race reads as a clear refusal the
+  // caller can act on, rather than an unhandled error with a stack trace.
+  const registerTool: McpServer["registerTool"] = (name, config, handler) =>
+    server.registerTool(
+      name,
+      config as any,
+      (async (...args: any[]) => {
+        try {
+          return await (handler as any)(...args);
+        } catch (error: any) {
+          if (error instanceof VersionConflictError) {
+            return failure(error.message);
+          }
+          throw error;
+        }
+      }) as any,
+    );
+
   // -- workspace registry ---------------------------------------------------
 
-  server.registerTool(
+  registerTool(
     "list_workspaces",
     {
       title: "List workspaces",
@@ -216,7 +237,7 @@ export const registerTools = (server: McpServer) => {
     },
   );
 
-  server.registerTool(
+  registerTool(
     "register_workspace",
     {
       title: "Register an existing share link",
@@ -246,7 +267,7 @@ export const registerTools = (server: McpServer) => {
     },
   );
 
-  server.registerTool(
+  registerTool(
     "create_workspace",
     {
       title: "Create a new workspace",
@@ -279,7 +300,7 @@ export const registerTools = (server: McpServer) => {
     },
   );
 
-  server.registerTool(
+  registerTool(
     "rename_workspace",
     {
       title: "Rename a workspace",
@@ -303,7 +324,7 @@ export const registerTools = (server: McpServer) => {
     },
   );
 
-  server.registerTool(
+  registerTool(
     "delete_workspace",
     {
       title: "Forget a workspace",
@@ -320,7 +341,7 @@ export const registerTools = (server: McpServer) => {
 
   // -- scene reads ----------------------------------------------------------
 
-  server.registerTool(
+  registerTool(
     "read_workspace",
     {
       title: "Read a workspace scene",
@@ -381,7 +402,7 @@ export const registerTools = (server: McpServer) => {
 
   // -- scene writes ---------------------------------------------------------
 
-  server.registerTool(
+  registerTool(
     "add_elements",
     {
       title: "Add elements to a workspace",
@@ -393,7 +414,7 @@ export const registerTools = (server: McpServer) => {
       },
     },
     async ({ name, elements: specs }) => {
-      const { scene, shareId, encryptionKey } = await loadScene(name);
+      const { scene, shareId, encryptionKey, version } = await loadScene(name);
       const refs = new Map<string, string>();
       const created: { ref?: string; id: string; type: string }[] = [];
 
@@ -416,17 +437,25 @@ export const registerTools = (server: McpServer) => {
         });
       }
 
-      await saveScene(name, scene, shareId, encryptionKey);
+      const committed = await saveScene(
+        name,
+        scene,
+        shareId,
+        encryptionKey,
+        version,
+        `Added ${created.length} element${created.length === 1 ? "" : "s"}`,
+      );
       return json({
         ok: true,
         name,
         added: created,
         elementCount: scene.elements.length,
+        version: committed,
       });
     },
   );
 
-  server.registerTool(
+  registerTool(
     "update_elements",
     {
       title: "Update existing elements",
@@ -445,6 +474,13 @@ export const registerTools = (server: McpServer) => {
               width: z.number().positive().optional(),
               height: z.number().positive().optional(),
               text: z.string().optional().describe("Text elements only"),
+              points: z
+                .array(z.array(z.number()).length(2))
+                .min(2)
+                .optional()
+                .describe(
+                  "Arrow/line elements only: absolute [x, y] canvas coordinates. The first point becomes the element's origin; the rest are stored relative to it. Replaces the element's whole shape.",
+                ),
               fontSize: z.number().positive().optional(),
               locked: z.boolean().optional(),
               ...baseElementOptions,
@@ -454,12 +490,14 @@ export const registerTools = (server: McpServer) => {
       },
     },
     async ({ name, updates }) => {
-      const { scene, shareId, encryptionKey } = await loadScene(name);
+      const { scene, shareId, encryptionKey, version } = await loadScene(name);
       const byId = new Map<string, any>(
         scene.elements.map((el: any) => [el.id, el]),
       );
       // Arrows bound to a shape whose geometry we change need re-routing.
       const movedShapeIds = new Set<string>();
+      // ...except ones the caller reshaped explicitly via `points`.
+      const reshapedIds = new Set<string>();
 
       const missing = updates.filter((u) => !byId.has(u.id)).map((u) => u.id);
       if (missing.length) {
@@ -472,8 +510,20 @@ export const registerTools = (server: McpServer) => {
         );
       }
 
-      for (const { id, dx, dy, text: newText, ...patch } of updates) {
+      for (const { id, dx, dy, text: newText, points, ...patch } of updates) {
         const el = byId.get(id)!;
+
+        if (points) {
+          // Same rebasing rule as createLine: absolute in, relative out.
+          const [originX, originY] = points[0];
+          el.x = originX;
+          el.y = originY;
+          el.points = points.map((pt) => [pt[0] - originX, pt[1] - originY]);
+          const xs = el.points.map((pt: number[]) => pt[0]);
+          const ys = el.points.map((pt: number[]) => pt[1]);
+          el.width = Math.max(...xs) - Math.min(...xs);
+          el.height = Math.max(...ys) - Math.min(...ys);
+        }
         const retextured =
           newText !== undefined || patch.fontSize !== undefined;
 
@@ -507,7 +557,12 @@ export const registerTools = (server: McpServer) => {
           Object.assign(el, ensureTextElementBounds(el));
         }
 
+        if (points) {
+          reshapedIds.add(el.id);
+        }
+
         if (
+          points !== undefined ||
           dx !== undefined ||
           dy !== undefined ||
           patch.x !== undefined ||
@@ -532,6 +587,9 @@ export const registerTools = (server: McpServer) => {
           if (el.type !== "arrow") {
             continue;
           }
+          if (reshapedIds.has(el.id)) {
+            continue;
+          }
           const touches =
             movedShapeIds.has(el.startBinding?.elementId) ||
             movedShapeIds.has(el.endBinding?.elementId);
@@ -544,10 +602,18 @@ export const registerTools = (server: McpServer) => {
         }
       }
 
-      await saveScene(name, scene, shareId, encryptionKey);
+      const committed = await saveScene(
+        name,
+        scene,
+        shareId,
+        encryptionKey,
+        version,
+        `Updated ${updates.length} element${updates.length === 1 ? "" : "s"}`,
+      );
       return json({
         ok: true,
         name,
+        version: committed,
         updated: updates.map((u) => u.id),
         ...(rerouted.length ? { reroutedArrows: rerouted } : {}),
         elementCount: scene.elements.length,
@@ -555,7 +621,82 @@ export const registerTools = (server: McpServer) => {
     },
   );
 
-  server.registerTool(
+  // -- version history ------------------------------------------------------
+
+  registerTool(
+    "list_versions",
+    {
+      title: "List scene versions",
+      description:
+        "List the saved versions of a workspace's scene, newest first. Every write from the app or the MCP creates one. Use the version number with restore_version.",
+      inputSchema: {
+        name: z.string().min(1),
+        limit: z.number().int().min(1).max(200).default(50),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async ({ name, limit }) => {
+      const ws = await getWorkspace(name);
+      if (!ws) {
+        return failure(`No workspace named "${name}".`);
+      }
+      const versions = await listVersions(ws.shareId, limit);
+      return json({ name, current: versions[0]?.version ?? 0, versions });
+    },
+  );
+
+  registerTool(
+    "restore_version",
+    {
+      title: "Restore a scene version",
+      description:
+        "Roll a workspace's scene back to an earlier version. This is non-destructive: the restored content is committed as a NEW version on top of the history, so nothing is lost and the restore can itself be undone.",
+      inputSchema: {
+        name: z.string().min(1),
+        version: z.number().int().min(1).describe("Version from list_versions"),
+      },
+    },
+    async ({ name, version }) => {
+      const ws = await getWorkspace(name);
+      if (!ws) {
+        return failure(`No workspace named "${name}".`);
+      }
+      const { version: currentVersion } = await loadScene(name);
+      if (version > currentVersion) {
+        return failure(
+          `Version ${version} does not exist (current is ${currentVersion}).`,
+        );
+      }
+      let snapshot;
+      try {
+        const blob = await downloadSceneVersion(ws.shareId, version);
+        snapshot = JSON.parse(
+          await decryptScenePayload(ws.encryptionKey, blob),
+        );
+      } catch {
+        return failure(
+          `Version ${version} has no stored snapshot. Versions written before history was enabled cannot be restored.`,
+        );
+      }
+      const committed = await saveScene(
+        name,
+        snapshot,
+        ws.shareId,
+        ws.encryptionKey,
+        currentVersion,
+        `Restored version ${version}`,
+      );
+      return json({
+        ok: true,
+        name,
+        restoredFrom: version,
+        version: committed,
+        elementCount: snapshot.elements?.length ?? 0,
+      });
+    },
+  );
+
+  registerTool(
     "replace_workspace",
     {
       title: "Replace a workspace scene",
@@ -569,7 +710,7 @@ export const registerTools = (server: McpServer) => {
       annotations: { destructiveHint: true },
     },
     async ({ name, elements, appState }) => {
-      const { shareId, encryptionKey } = await loadScene(name);
+      const { shareId, encryptionKey, version } = await loadScene(name);
       const normalizedElements = elements.map(ensureTextElementBounds);
       const scene = {
         type: "excalidraw",
@@ -578,17 +719,25 @@ export const registerTools = (server: McpServer) => {
         elements: normalizedElements,
         appState: appState ?? {},
       };
-      await saveScene(name, scene, shareId, encryptionKey);
+      const committed = await saveScene(
+        name,
+        scene,
+        shareId,
+        encryptionKey,
+        version,
+        "Replaced scene",
+      );
       return json({
         ok: true,
         name,
         url: workspaceUrl(shareId, encryptionKey),
         elementCount: normalizedElements.length,
+        version: committed,
       });
     },
   );
 
-  server.registerTool(
+  registerTool(
     "clear_workspace",
     {
       title: "Clear a workspace scene",
@@ -605,7 +754,7 @@ export const registerTools = (server: McpServer) => {
     },
   );
 
-  server.registerTool(
+  registerTool(
     "delete_elements",
     {
       title: "Delete elements",

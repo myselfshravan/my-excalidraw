@@ -8,7 +8,9 @@ import {
   downloadScene,
   encryptScenePayload,
   uploadScene,
+  uploadSceneVersion,
 } from "./scene.js";
+import { commitVersion, getCurrentVersion } from "./versions.js";
 
 export type Scene = {
   type: string;
@@ -32,6 +34,7 @@ export const loadScene = async (
   scene: Scene;
   shareId: string;
   encryptionKey: string;
+  version: number;
 }> => {
   const ws = await getWorkspace(workspaceName);
   if (!ws) {
@@ -50,29 +53,73 @@ export const loadScene = async (
       throw error;
     }
   }
-  return { scene, shareId: ws.shareId, encryptionKey: ws.encryptionKey };
+  const version = await getCurrentVersion(ws.shareId);
+  return {
+    scene,
+    shareId: ws.shareId,
+    encryptionKey: ws.encryptionKey,
+    version,
+  };
 };
 
+/**
+ * Writes a new version of the scene. `baseVersion` is the version the change
+ * was computed from; if anyone has written since, this refuses rather than
+ * overwriting their work (see versions.ts for the shared contract).
+ *
+ * The snapshot blob is uploaded BEFORE the version is committed, so a
+ * committed version always has content behind it. A failed commit leaves an
+ * unreferenced blob, which is harmless.
+ */
 export const saveScene = async (
   workspaceName: string,
   scene: Scene,
   shareId: string,
   encryptionKey: string,
-): Promise<void> => {
+  baseVersion: number,
+  label?: string,
+): Promise<number> => {
   const buffer = await encryptScenePayload(
     encryptionKey,
     JSON.stringify(scene),
   );
+  const next = baseVersion + 1;
+  // Best-effort, same reasoning as the web app: history is worth less than
+  // conflict detection, so a snapshot failure must not block the write.
+  try {
+    await uploadSceneVersion(shareId, next, buffer);
+  } catch (error) {
+    console.error("version snapshot upload failed", error);
+  }
+  const committed = await commitVersion(
+    shareId,
+    baseVersion,
+    "mcp",
+    scene.elements.length,
+    label,
+  );
+  // Only now move the pointer the web app loads from.
   await uploadScene(shareId, buffer);
   await touchWorkspace(workspaceName);
+  return committed;
 };
 
 export const mutateScene = async (
   workspaceName: string,
   mutate: (scene: Scene) => Scene | void,
-): Promise<{ elementCount: number }> => {
-  const { scene, shareId, encryptionKey } = await loadScene(workspaceName);
+  label?: string,
+): Promise<{ elementCount: number; version: number }> => {
+  const { scene, shareId, encryptionKey, version } = await loadScene(
+    workspaceName,
+  );
   const next = mutate(scene) ?? scene;
-  await saveScene(workspaceName, next, shareId, encryptionKey);
-  return { elementCount: next.elements.length };
+  const committed = await saveScene(
+    workspaceName,
+    next,
+    shareId,
+    encryptionKey,
+    version,
+    label,
+  );
+  return { elementCount: next.elements.length, version: committed };
 };

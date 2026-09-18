@@ -32,6 +32,8 @@ import type {
 
 import { FILE_CACHE_MAX_AGE_SEC } from "../app_constants";
 
+import { currentScenePath, sceneVersionPath } from "./sceneVersions";
+
 import { getSyncableElements } from ".";
 
 import type { SyncableExcalidrawElement } from ".";
@@ -88,12 +90,39 @@ export const getAppFirestore = () => _getFirestore();
 
 export const saveSceneToFirebase = async (id: string, buffer: ArrayBuffer) => {
   const storage = await loadFirebaseStorage();
-  const storageRef = ref(storage, `files/shareLinks/${id}/scene`);
+  const storageRef = ref(storage, currentScenePath(id));
   await uploadBytes(storageRef, new Uint8Array(buffer), {
     // Share scenes are overwritten at a stable path, so a long-lived response
     // cache could make clients load an earlier version of the drawing.
     cacheControl: "no-cache, max-age=0, must-revalidate",
   });
+};
+
+/** Immutable per-version snapshot backing the version history. */
+export const saveSceneVersionToFirebase = async (
+  id: string,
+  version: number,
+  buffer: ArrayBuffer,
+) => {
+  const storage = await loadFirebaseStorage();
+  const storageRef = ref(storage, sceneVersionPath(id, version));
+  await uploadBytes(storageRef, new Uint8Array(buffer), {
+    cacheControl: "public, max-age=31536000, immutable",
+  });
+};
+
+export const loadSceneVersionFromFirebase = async (
+  id: string,
+  version: number,
+): Promise<ArrayBuffer | null> => {
+  const url = `https://firebasestorage.googleapis.com/v0/b/${
+    FIREBASE_CONFIG.storageBucket
+  }/o/${encodeURIComponent(sceneVersionPath(id, version))}?alt=media`;
+  const response = await fetch(url);
+  if (!response.ok) {
+    return null;
+  }
+  return response.arrayBuffer();
 };
 
 export const loadSceneFromFirebase = async (

@@ -6,6 +6,7 @@
 import { deflate, inflate } from "pako";
 
 import { bucket } from "./firebase.js";
+import { VERSION_BLOB_PATH } from "./versions.js";
 
 const VERSION_BYTES = 4;
 const CHUNK_LEN_BYTES = 4;
@@ -148,6 +149,29 @@ const sceneStoragePath = (id: string) => `files/shareLinks/${id}/scene`;
 export const downloadScene = async (id: string): Promise<Uint8Array> => {
   const [data] = await bucket().file(sceneStoragePath(id)).download();
   return new Uint8Array(data);
+};
+
+/** Reads one immutable snapshot rather than the current pointer. */
+export const downloadSceneVersion = async (
+  id: string,
+  version: number,
+): Promise<Uint8Array> => {
+  const [data] = await bucket().file(VERSION_BLOB_PATH(id, version)).download();
+  return new Uint8Array(data);
+};
+
+export const uploadSceneVersion = async (
+  id: string,
+  version: number,
+  buffer: Uint8Array,
+): Promise<void> => {
+  // Snapshots are immutable, so they can be cached hard.
+  await bucket()
+    .file(VERSION_BLOB_PATH(id, version))
+    .save(Buffer.from(buffer), {
+      contentType: "application/octet-stream",
+      metadata: { cacheControl: "public, max-age=31536000, immutable" },
+    });
 };
 
 export const uploadScene = async (

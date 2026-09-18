@@ -8,6 +8,17 @@ service cloud.firestore {
       allow get, list, write: if true;
     }
 
+    // Scene version index + history, shared by the app and the MCP server.
+    // `list` is required so the version-history panel can enumerate snapshots;
+    // the catch-all below denies listing, so this must be stated explicitly.
+    match /scene_versions/{shareId} {
+      allow get, list, write: if true;
+
+      match /history/{version} {
+        allow get, list, write: if true;
+      }
+    }
+
     match /{document=**} {
       allow get, write: if true;
       // never set this to true, otherwise anyone can delete anyone else's drawing.
