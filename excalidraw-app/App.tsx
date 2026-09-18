@@ -258,20 +258,6 @@ const initializeScene = async (opts: {
   let roomLinkData = getCollaborationLinkData(window.location.href);
   const isExternalScene = !!(id || jsonBackendMatch || roomLinkData);
 
-  // Helper function to detect if scene is truly empty (no user content)
-  const isSceneEmpty = (elements: OrderedExcalidrawElement[]) => {
-    if (!elements.length) return true;
-    // Check if all elements are just empty rects/text with no real content
-    return elements.every(el =>
-      el.type === 'rectangle' &&
-      el.width === 100 &&
-      el.height === 100 &&
-      el.fillStyle === 'solid' &&
-      el.strokeWidth === 2 &&
-      Object.keys(el).length <= 8 // Minimal properties suggest default/placeholder
-    );
-  };
-
   if (isExternalScene) {
     // Workspace share links (#json=id,key) are first-class, addressable
     // documents in this fork — each one auto-persists to its own Firebase
@@ -281,12 +267,12 @@ const initializeScene = async (opts: {
     // (private mode / quota), fall back to the safe prompt.
     const workspaceLink = !!jsonBackendMatch;
     const autoLoadWorkspace =
-      workspaceLink && (isSceneEmpty(scene.elements) || backupLocalScene());
+      workspaceLink && (!scene.elements.length || backupLocalScene());
 
     if (
       autoLoadWorkspace ||
-      // don't prompt if scene is empty or has only default elements
-      isSceneEmpty(scene.elements) ||
+      // don't prompt if scene is empty
+      !scene.elements.length ||
       // don't prompt for collab scenes because we don't override local storage
       roomLinkData ||
       // otherwise, prompt whether user wants to override current scene
@@ -346,20 +332,8 @@ const initializeScene = async (opts: {
       const request = await fetch(window.decodeURIComponent(url));
       const data = await loadFromBlob(await request.blob(), null, null);
 
-      // Helper function to detect if scene is truly empty (no user content)
-      const isSceneEmptyExternal = (elements: any[]) => {
-        if (!elements.length) return true;
-        return elements.every(el =>
-          el.type === 'rectangle' &&
-          el.width === 100 &&
-          el.height === 100 &&
-          el.fillStyle === 'solid' &&
-          el.strokeWidth === 2
-        );
-      };
-
       if (
-        isSceneEmptyExternal(scene.elements) ||
+        !scene.elements.length ||
         (await openConfirmModal(shareableLinkConfirmDialog))
       ) {
         return { scene: data, isExternalScene };
@@ -630,7 +604,9 @@ const ExcalidrawWrapper = () => {
         }
       }
     },
-    [collabAPI, excalidrawAPI],
+    // `adoptShareLink` is a useCallback with no deps, so it is stable and
+    // listing it here does not change when this callback is recreated.
+    [collabAPI, excalidrawAPI, adoptShareLink],
   );
 
   useEffect(() => {
@@ -849,9 +825,13 @@ const ExcalidrawWrapper = () => {
         if (!link) {
           return;
         }
-        updateShareLinkScene(link.id, link.key, elements, appState, files).catch(
-          (error) => console.error("share link auto-save failed", error),
-        );
+        updateShareLinkScene(
+          link.id,
+          link.key,
+          elements,
+          appState,
+          files,
+        ).catch((error) => console.error("share link auto-save failed", error));
       }, 2000);
     }
   };
