@@ -98,7 +98,12 @@ export const saveScene = async (
     scene.elements.length,
     label,
   );
-  // Only now move the pointer the web app loads from.
+  // The pointer is written AFTER the version is committed, so between these
+  // two lines it still holds the previous scene. That ordering is deliberate:
+  // committing first is what makes a losing writer fail before it can
+  // overwrite anything. The consequence is that the pointer is eventually
+  // consistent, so readers that care about a specific version must read
+  // versions/<n> instead — which is what the app's live refresh does.
   await uploadScene(shareId, buffer);
   await touchWorkspace(workspaceName);
   return committed;

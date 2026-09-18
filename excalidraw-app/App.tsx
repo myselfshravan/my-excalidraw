@@ -498,36 +498,59 @@ const ExcalidrawWrapper = () => {
     [],
   );
 
-  /** Pulls the current remote scene into the canvas, discarding local edits. */
-  const reloadFromRemote = useCallback(async () => {
-    const link = shareLinkRef.current;
-    if (!link || !excalidrawAPI) {
-      return;
-    }
-    setIsReloading(true);
-    try {
-      const data = await importFromBackend(link.id, link.key);
-      const elements = data.elements ?? [];
-      sceneVersionRef.current = await getCurrentSceneVersion(link.id);
-      excalidrawAPI.updateScene({
-        elements,
-        captureUpdate: CaptureUpdateAction.IMMEDIATELY,
-      });
-      // Baseline from the scene Excalidraw actually holds — `restore`
-      // normalizes elements, so the payload's own signature would differ and
-      // the next onChange would re-upload what we just read.
-      const signature = getSceneVersion(
-        excalidrawAPI.getSceneElementsIncludingDeleted(),
-      );
-      lastSavedSignatureRef.current = signature;
-      latestSignatureRef.current = signature;
-      setRemoteChange(null);
-    } catch (error) {
-      console.error("reload from remote failed", error);
-    } finally {
-      setIsReloading(false);
-    }
-  }, [excalidrawAPI]);
+  /**
+   * Pulls the remote scene into the canvas, discarding local edits.
+   *
+   * Prefers the immutable snapshot for `targetVersion` over the mutable
+   * pointer blob. The writer commits its version (which wakes us) BEFORE it
+   * finishes rewriting the pointer, so reading the pointer here can return the
+   * previous scene while we record the new version — leaving the tab
+   * permanently one version behind. The snapshot for a committed version is
+   * always already written, so it cannot race.
+   */
+  const reloadFromRemote = useCallback(
+    async (targetVersion?: number) => {
+      const link = shareLinkRef.current;
+      if (!link || !excalidrawAPI) {
+        return;
+      }
+      setIsReloading(true);
+      try {
+        let data = null;
+        if (targetVersion) {
+          try {
+            data = await loadShareLinkVersion(link.id, link.key, targetVersion);
+          } catch (error) {
+            console.warn("version snapshot unavailable, using pointer", error);
+          }
+        }
+        if (!data) {
+          data = await importFromBackend(link.id, link.key);
+        }
+        const elements = data.elements ?? [];
+        sceneVersionRef.current =
+          targetVersion ?? (await getCurrentSceneVersion(link.id));
+        excalidrawAPI.updateScene({
+          elements,
+          captureUpdate: CaptureUpdateAction.IMMEDIATELY,
+        });
+        // Baseline from the scene Excalidraw actually holds — `restore`
+        // normalizes elements, so the payload's own signature would differ and
+        // the next onChange would re-upload what we just read.
+        const signature = getSceneVersion(
+          excalidrawAPI.getSceneElementsIncludingDeleted(),
+        );
+        lastSavedSignatureRef.current = signature;
+        latestSignatureRef.current = signature;
+        setRemoteChange(null);
+      } catch (error) {
+        console.error("reload from remote failed", error);
+      } finally {
+        setIsReloading(false);
+      }
+    },
+    [excalidrawAPI],
+  );
 
   /** Forces this tab's scene to win, rebasing onto whatever is stored now. */
   const overwriteRemote = useCallback(async () => {
@@ -613,7 +636,7 @@ const ExcalidrawWrapper = () => {
       if (hasUnsavedLocal) {
         setRemoteChange({ version, updatedBy });
       } else {
-        reloadFromRemote();
+        reloadFromRemote(version);
       }
     });
   }, [activeShareId, reloadFromRemote]);
@@ -1371,7 +1394,7 @@ const ExcalidrawWrapper = () => {
             version={remoteChange.version}
             updatedBy={remoteChange.updatedBy}
             busy={isReloading}
-            onReload={reloadFromRemote}
+            onReload={() => reloadFromRemote(remoteChange.version)}
             onOverwrite={overwriteRemote}
             onDismiss={() => setRemoteChange(null)}
           />
