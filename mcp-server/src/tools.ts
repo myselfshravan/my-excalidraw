@@ -1,8 +1,12 @@
+import { randomUUID } from "node:crypto";
+
 import { z } from "zod";
 
 import {
   attachArrowBindings,
   createArrow,
+  createBoundLabel,
+  createFrame,
   createDiamond,
   createEllipse,
   createLine,
@@ -30,6 +34,16 @@ import {
 } from "./scene.js";
 import { loadScene, mutateScene, saveScene } from "./scene-ops.js";
 import { listVersions, VersionConflictError } from "./versions.js";
+import {
+  arrangeElements,
+  describeElement,
+  findElements,
+  recenterBoundLabels,
+  reorderElements,
+  summarize,
+  type ArrangeOp,
+  type El,
+} from "./query.js";
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
@@ -86,28 +100,56 @@ const arrowEndpoint = z
     "Raw coordinates, an existing element's id, or the `ref` of an element created earlier in this same call.",
   );
 
+const label = z
+  .string()
+  .optional()
+  .describe(
+    "Text placed INSIDE this shape as a bound label, so it moves and resizes with the shape. Prefer this over a separate text element for captions.",
+  );
+
+const group = z
+  .string()
+  .optional()
+  .describe(
+    "Group name local to this call. Elements sharing it become one Excalidraw group, selected and moved together.",
+  );
+
 const elementSpec = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("rectangle"),
     ref,
+    label,
+    group,
     ...boxArgs,
     ...baseElementOptions,
   }),
   z.object({
     type: z.literal("ellipse"),
     ref,
+    label,
+    group,
     ...boxArgs,
     ...baseElementOptions,
   }),
   z.object({
     type: z.literal("diamond"),
     ref,
+    label,
+    group,
     ...boxArgs,
     ...baseElementOptions,
   }),
   z.object({
+    type: z.literal("frame"),
+    ref,
+    group,
+    name: z.string().optional().describe("Caption shown above the frame"),
+    ...boxArgs,
+  }),
+  z.object({
     type: z.literal("text"),
     ref,
+    group,
     x: z.number(),
     y: z.number(),
     text: z.string(),
@@ -123,6 +165,8 @@ const elementSpec = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("arrow"),
     ref,
+    group,
+    label,
     from: arrowEndpoint,
     to: arrowEndpoint,
     startArrowhead: z
@@ -138,6 +182,7 @@ const elementSpec = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("line"),
     ref,
+    group,
     points: z
       .array(z.array(z.number()).length(2))
       .min(2)
@@ -156,22 +201,67 @@ type ElementSpec = z.infer<typeof elementSpec>;
  * Arrow bindings are attached to their target shapes here so the shapes know
  * about the arrow too.
  */
-const buildElement = (
+/**
+ * Builds the element(s) for one spec. Returns an array because a shape with a
+ * `label` also produces the bound text element that lives inside it.
+ *
+ * Arrow endpoints resolve against the existing scene and against refs of
+ * elements created earlier in the same batch; bindings are attached to their
+ * targets here so the shapes know about the arrow too.
+ */
+const buildElements = (
   spec: ElementSpec,
   sceneElements: BindableElement[],
   refs: Map<string, string>,
-) => {
+  groups: Map<string, string>,
+): El[] => {
+  const groupIdFor = (name?: string) => {
+    if (!name) {
+      return undefined;
+    }
+    if (!groups.has(name)) {
+      groups.set(name, randomUUID());
+    }
+    return [groups.get(name)!];
+  };
+
+  const withGroup = (el: El, name?: string) => {
+    const ids = groupIdFor(name);
+    if (ids) {
+      el.groupIds = ids;
+    }
+    return el;
+  };
+
   switch (spec.type) {
     case "rectangle":
-      return createRectangle(spec);
     case "ellipse":
-      return createEllipse(spec);
-    case "diamond":
-      return createDiamond(spec);
+    case "diamond": {
+      const make =
+        spec.type === "rectangle"
+          ? createRectangle
+          : spec.type === "ellipse"
+          ? createEllipse
+          : createDiamond;
+      const shape: El = withGroup(make(spec), spec.group);
+      if (!spec.label) {
+        return [shape];
+      }
+      // The label registers itself on the shape's boundElements.
+      const text = withGroup(
+        createBoundLabel(shape as any, spec.label),
+        spec.group,
+      );
+      return [shape, text];
+    }
+    case "frame":
+      return [
+        withGroup(createFrame({ ...spec, frameName: spec.name }), spec.group),
+      ];
     case "text":
-      return createText(spec);
+      return [withGroup(createText(spec), spec.group)];
     case "line":
-      return createLine(spec);
+      return [withGroup(createLine(spec), spec.group)];
     case "arrow": {
       const resolveEnd = (end: z.infer<typeof arrowEndpoint>) => {
         if ("ref" in end) {
@@ -185,14 +275,59 @@ const buildElement = (
         }
         return end;
       };
-      const arrow = createArrow(
-        { ...spec, from: resolveEnd(spec.from), to: resolveEnd(spec.to) },
-        sceneElements,
+      const arrow: El = withGroup(
+        createArrow(
+          { ...spec, from: resolveEnd(spec.from), to: resolveEnd(spec.to) },
+          sceneElements,
+        ),
+        spec.group,
       );
-      attachArrowBindings(arrow, sceneElements);
-      return arrow;
+      attachArrowBindings(arrow as any, sceneElements);
+      if (!spec.label) {
+        return [arrow];
+      }
+      const text = createBoundLabel(arrow as any, spec.label);
+      return [arrow, text];
     }
   }
+};
+
+/** Excalidraw uses these to detect a change on load / during sync. */
+const bumpVersions = (elements: El[]) => {
+  for (const el of elements) {
+    el.version = (el.version ?? 1) + 1;
+    el.versionNonce = Math.floor(Math.random() * 2 ** 31);
+    el.updated = Date.now();
+  }
+};
+
+/**
+ * Re-routes every arrow bound to a shape whose geometry changed, so it still
+ * meets the shape's edge. Arrows in `skip` were reshaped explicitly by the
+ * caller and must keep the geometry they were given.
+ */
+const rerouteArrowsFor = (
+  elements: El[],
+  changedIds: Set<string>,
+  skip: Set<string> = new Set(),
+): string[] => {
+  if (changedIds.size === 0) {
+    return [];
+  }
+  const rerouted: string[] = [];
+  for (const el of elements) {
+    if (el.type !== "arrow" || skip.has(el.id)) {
+      continue;
+    }
+    const touches =
+      changedIds.has(el.startBinding?.elementId) ||
+      changedIds.has(el.endBinding?.elementId);
+    if (touches && reanchorArrow(el as any, elements as any)) {
+      bumpVersions([el]);
+      rerouted.push(el.id);
+    }
+  }
+  return rerouted;
 };
 
 export const registerTools = (server: McpServer) => {
@@ -416,25 +551,30 @@ export const registerTools = (server: McpServer) => {
     async ({ name, elements: specs }) => {
       const { scene, shareId, encryptionKey, version } = await loadScene(name);
       const refs = new Map<string, string>();
+      const groups = new Map<string, string>();
       const created: { ref?: string; id: string; type: string }[] = [];
 
       for (const spec of specs) {
-        let el;
+        let built: El[];
         try {
-          el = buildElement(spec, scene.elements, refs);
+          built = buildElements(spec, scene.elements, refs, groups);
         } catch (error: any) {
           // Nothing has been saved yet, so the scene is untouched.
           return failure(error.message);
         }
-        scene.elements.push(el);
+        // built[0] is the element itself; anything after is its bound label.
+        const [primary] = built;
+        scene.elements.push(...built);
         if (spec.ref) {
-          refs.set(spec.ref, el.id);
+          refs.set(spec.ref, primary.id);
         }
-        created.push({
-          ...(spec.ref ? { ref: spec.ref } : {}),
-          id: el.id,
-          type: el.type,
-        });
+        for (const el of built) {
+          created.push({
+            ...(el.id === primary.id && spec.ref ? { ref: spec.ref } : {}),
+            id: el.id,
+            type: el.type,
+          });
+        }
       }
 
       const committed = await saveScene(
@@ -573,34 +713,18 @@ export const registerTools = (server: McpServer) => {
           movedShapeIds.add(el.id);
         }
 
-        // Excalidraw uses these to detect a change on load / during sync.
-        el.version = (el.version ?? 1) + 1;
-        el.versionNonce = Math.floor(Math.random() * 2 ** 31);
-        el.updated = Date.now();
+        bumpVersions([el]);
       }
 
-      // Re-route every arrow bound to something that moved, so it still meets
-      // the shape's edge instead of dangling or ending up inside it.
-      const rerouted: string[] = [];
-      if (movedShapeIds.size) {
-        for (const el of scene.elements as any[]) {
-          if (el.type !== "arrow") {
-            continue;
-          }
-          if (reshapedIds.has(el.id)) {
-            continue;
-          }
-          const touches =
-            movedShapeIds.has(el.startBinding?.elementId) ||
-            movedShapeIds.has(el.endBinding?.elementId);
-          if (touches && reanchorArrow(el, scene.elements)) {
-            el.version = (el.version ?? 1) + 1;
-            el.versionNonce = Math.floor(Math.random() * 2 ** 31);
-            el.updated = Date.now();
-            rerouted.push(el.id);
-          }
-        }
-      }
+      const movedLabels = recenterBoundLabels(scene.elements, movedShapeIds);
+      bumpVersions(
+        scene.elements.filter((el: El) => movedLabels.includes(el.id)),
+      );
+      const rerouted = rerouteArrowsFor(
+        scene.elements,
+        movedShapeIds,
+        reshapedIds,
+      );
 
       const committed = await saveScene(
         name,
@@ -617,6 +741,234 @@ export const registerTools = (server: McpServer) => {
         updated: updates.map((u) => u.id),
         ...(rerouted.length ? { reroutedArrows: rerouted } : {}),
         elementCount: scene.elements.length,
+      });
+    },
+  );
+
+  // -- navigation -----------------------------------------------------------
+
+  registerTool(
+    "find_elements",
+    {
+      title: "Find elements",
+      description:
+        "Search a workspace's elements by type, text, region, group or frame, returning compact summaries. Use this instead of reading the whole scene when you need to locate something — e.g. every arrow, or every element whose text mentions 'auth', or everything inside a rectangle of canvas space.",
+      inputSchema: {
+        name: z.string().min(1),
+        type: z
+          .array(z.string())
+          .optional()
+          .describe('Element types to include, e.g. ["rectangle","arrow"]'),
+        text: z
+          .string()
+          .optional()
+          .describe("Case-insensitive substring match against element text"),
+        ids: z.array(z.string()).optional(),
+        group_id: z.string().optional(),
+        frame_id: z.string().optional(),
+        region: z
+          .object({
+            x: z.number(),
+            y: z.number(),
+            width: z.number(),
+            height: z.number(),
+          })
+          .optional()
+          .describe("Canvas rectangle; matches elements that INTERSECT it"),
+        include_deleted: z.boolean().optional(),
+        limit: z.number().int().min(1).max(500).default(100),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async ({ name, limit, ...filters }) => {
+      const { scene } = await loadScene(name);
+      const matches = findElements(scene.elements, filters);
+      return json({
+        name,
+        matched: matches.length,
+        returned: Math.min(matches.length, limit),
+        elements: matches.slice(0, limit).map(summarize),
+      });
+    },
+  );
+
+  registerTool(
+    "describe_element",
+    {
+      title: "Describe an element and its relationships",
+      description:
+        "Full detail for one element plus what it is connected to: arrows in and out (with the text of what they connect to), its bound label, group siblings, frame membership and z-index. This is how to follow a diagram's structure without reading every element.",
+      inputSchema: {
+        name: z.string().min(1),
+        element_id: z.string(),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async ({ name, element_id }) => {
+      const { scene } = await loadScene(name);
+      const described = describeElement(scene.elements, element_id);
+      if (!described) {
+        return failure(`No element "${element_id}" in "${name}".`);
+      }
+      return json(described);
+    },
+  );
+
+  // -- layout and structure ---------------------------------------------------
+
+  registerTool(
+    "arrange_elements",
+    {
+      title: "Align, distribute or lay out elements",
+      description:
+        "Reposition elements as a set: align them on an edge or centre, distribute them evenly, stack them with a gap, or lay them out in a grid. Only positions change — nothing is resized, so text and bound labels stay intact. Arrows bound to anything that moves are re-routed.",
+      inputSchema: {
+        name: z.string().min(1),
+        element_ids: z.array(z.string()).min(2),
+        operation: z.enum([
+          "align-left",
+          "align-right",
+          "align-top",
+          "align-bottom",
+          "align-center-x",
+          "align-center-y",
+          "distribute-horizontal",
+          "distribute-vertical",
+          "stack-horizontal",
+          "stack-vertical",
+          "grid",
+        ]),
+        gap: z
+          .number()
+          .optional()
+          .describe("Spacing for stack/grid operations (default 20)"),
+        columns: z
+          .number()
+          .int()
+          .min(1)
+          .optional()
+          .describe("Grid columns (default: roughly square)"),
+      },
+    },
+    async ({ name, element_ids, operation, gap, columns }) => {
+      const { scene, shareId, encryptionKey, version } = await loadScene(name);
+      const idSet = new Set(element_ids);
+      const targets = scene.elements.filter((el: El) => idSet.has(el.id));
+      const missing = element_ids.filter(
+        (id) => !targets.some((el: El) => el.id === id),
+      );
+      if (missing.length) {
+        return failure(
+          `No such element(s) in "${name}": ${missing.join(", ")}.`,
+        );
+      }
+      const moved = arrangeElements(targets, operation as ArrangeOp, {
+        gap,
+        columns,
+      });
+      if (moved === 0) {
+        return failure(
+          `"${operation}" needs at least 3 elements to be meaningful.`,
+        );
+      }
+      bumpVersions(targets);
+      const movedLabels = recenterBoundLabels(scene.elements, idSet);
+      bumpVersions(
+        scene.elements.filter((el: El) => movedLabels.includes(el.id)),
+      );
+      const rerouted = rerouteArrowsFor(scene.elements, idSet);
+      const committed = await saveScene(
+        name,
+        scene,
+        shareId,
+        encryptionKey,
+        version,
+        `Arranged ${moved} elements (${operation})`,
+      );
+      return json({
+        ok: true,
+        name,
+        operation,
+        moved,
+        ...(rerouted.length ? { reroutedArrows: rerouted } : {}),
+        version: committed,
+      });
+    },
+  );
+
+  registerTool(
+    "organize_elements",
+    {
+      title: "Group, ungroup or restack elements",
+      description:
+        "Structural edits that are not about position: group elements so they select and move together, ungroup them, or change their z-order (which element paints on top).",
+      inputSchema: {
+        name: z.string().min(1),
+        element_ids: z.array(z.string()).min(1),
+        action: z.enum([
+          "group",
+          "ungroup",
+          "bring-to-front",
+          "send-to-back",
+          "bring-forward",
+          "send-backward",
+        ]),
+      },
+    },
+    async ({ name, element_ids, action }) => {
+      const { scene, shareId, encryptionKey, version } = await loadScene(name);
+      const idSet = new Set(element_ids);
+      const targets = scene.elements.filter((el: El) => idSet.has(el.id));
+      if (targets.length !== element_ids.length) {
+        const missing = element_ids.filter(
+          (id) => !targets.some((el: El) => el.id === id),
+        );
+        return failure(
+          `No such element(s) in "${name}": ${missing.join(", ")}.`,
+        );
+      }
+
+      let detail: Record<string, unknown> = {};
+      if (action === "group") {
+        const groupId = randomUUID();
+        for (const el of targets) {
+          el.groupIds = [...(el.groupIds ?? []), groupId];
+        }
+        detail = { groupId };
+      } else if (action === "ungroup") {
+        // Drop only the innermost group, so nested grouping survives.
+        for (const el of targets) {
+          el.groupIds = (el.groupIds ?? []).slice(0, -1);
+        }
+      } else {
+        const map: Record<string, "front" | "back" | "forward" | "backward"> = {
+          "bring-to-front": "front",
+          "send-to-back": "back",
+          "bring-forward": "forward",
+          "send-backward": "backward",
+        };
+        scene.elements = reorderElements(
+          scene.elements,
+          element_ids,
+          map[action],
+        );
+      }
+      bumpVersions(targets);
+      const committed = await saveScene(
+        name,
+        scene,
+        shareId,
+        encryptionKey,
+        version,
+        `${action} ${targets.length} element${targets.length === 1 ? "" : "s"}`,
+      );
+      return json({
+        ok: true,
+        name,
+        action,
+        count: targets.length,
+        ...detail,
+        version: committed,
       });
     },
   );

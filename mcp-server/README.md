@@ -21,7 +21,12 @@ Read/write goes through the Firebase Admin SDK directly to the same encrypted sc
 | Tool | Purpose |
 | --- | --- |
 | `read_workspace(name, mode?)` | Fetch + decrypt the scene. `mode="summary"` (default) returns one compact line per element plus per-type counts; `mode="full"` returns the raw elements array + appState |
-| `add_elements(name, elements)` | Append one or more elements in a single round-trip |
+| `add_elements(name, elements)` | Append one or more elements in a single round-trip. Types: `rectangle`, `ellipse`, `diamond`, `frame`, `text`, `arrow`, `line`. Shapes and arrows take a `label` (bound text placed inside them) and a `group` name |
+| `find_elements(name, ...)` | Search by type, text, region, group or frame; returns compact summaries |
+| `describe_element(name, element_id)` | One element plus its relationships: arrows in/out (with the text at the far end), bound label, group siblings, frame, z-index |
+| `arrange_elements(name, element_ids, operation)` | align-left/right/top/bottom/center-x/center-y, distribute-horizontal/vertical, stack-horizontal/vertical, grid |
+| `organize_elements(name, element_ids, action)` | group, ungroup, bring-to-front, send-to-back, bring-forward, send-backward |
+| `list_versions(name)` / `restore_version(name, version)` | Browse and roll back the edit history |
 | `update_elements(name, updates)` | Change existing elements in place by id — move, resize, restyle, edit text |
 | `replace_workspace(name, elements, appState?)` | Replace the entire scene |
 | `clear_workspace(name)` | Remove all elements (keeps workspace registered) |

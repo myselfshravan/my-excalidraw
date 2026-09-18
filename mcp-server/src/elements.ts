@@ -168,6 +168,75 @@ export const createText = (args: TextArgs) => {
   };
 };
 
+export type FrameArgs = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  frameName?: string;
+} & BaseElementOptions;
+
+export const createFrame = (args: FrameArgs) => ({
+  type: "frame" as const,
+  ...baseDefaults(args),
+  x: args.x,
+  y: args.y,
+  width: args.width,
+  height: args.height,
+  name: args.frameName ?? null,
+  // Frames render their own chrome; these are fixed by the app.
+  strokeColor: "#bbb",
+  backgroundColor: "transparent",
+  roundness: null,
+});
+
+/**
+ * Creates a text element bound INSIDE a container (a shape's label), and
+ * registers it on the container. Excalidraw needs both halves: the text's
+ * containerId and the container's boundElements entry.
+ */
+export const createBoundLabel = (
+  container: {
+    id: string;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    boundElements?: { id: string; type: "arrow" | "text" }[] | null;
+  },
+  text: string,
+  opts: {
+    fontSize?: number;
+    fontFamily?: 1 | 2 | 3;
+    strokeColor?: string;
+  } = {},
+) => {
+  const fontSize = opts.fontSize ?? 20;
+  const lineHeight = 1.25;
+  const { width, height } = estimateTextSize(text, fontSize, lineHeight);
+  const label = {
+    type: "text" as const,
+    ...baseDefaults({ strokeColor: opts.strokeColor }),
+    // Centred in the container; the app re-measures precisely on edit.
+    x: container.x + (container.width - width) / 2,
+    y: container.y + (container.height - height) / 2,
+    width,
+    height,
+    text,
+    fontSize,
+    fontFamily: opts.fontFamily ?? 1,
+    textAlign: "center" as const,
+    verticalAlign: "middle" as const,
+    containerId: container.id,
+    originalText: text,
+    autoResize: false,
+    lineHeight,
+  };
+  const bound = container.boundElements ?? [];
+  container.boundElements = [...bound, { id: label.id, type: "text" }];
+  return label;
+};
+
 export type ArrowEnd = { x: number; y: number } | { elementId: string };
 
 export type ArrowArgs = {
