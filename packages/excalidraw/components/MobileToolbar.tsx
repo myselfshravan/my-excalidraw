@@ -12,9 +12,11 @@ import { ToolPopover } from "./ToolPopover";
 import {
   EraserToolButton,
   FrameToolButton,
-  FreedrawToolButton,
+  FreedrawToolPopover,
+  getToolShortcut,
   HandToolButton,
   ImageToolButton,
+  isToolButtonDisabled,
   SelectionToolPopover,
   TextToolButton,
   TOOLS,
@@ -23,12 +25,15 @@ import {
 import {
   TextIcon,
   ImageIcon,
-  extraToolsIcon,
+  DotsIcon,
   frameToolIcon,
   EmbedIcon,
   laserPointerToolIcon,
+  drawShapeToolIcon,
+  bucketFillIcon,
   mermaidLogoIcon,
   MagicIcon,
+  stickyNoteToolIcon,
 } from "./icons";
 
 import "./ToolIcon.scss";
@@ -70,8 +75,11 @@ export const MobileToolbar = ({ app, setAppState }: MobileToolbarProps) => {
   }, [activeTool.type]);
 
   const frameToolSelected = activeTool.type === "frame";
+  const drawShapeToolSelected = activeTool.type === "autoshape";
   const laserToolSelected = activeTool.type === "laser";
   const embeddableToolSelected = activeTool.type === "embeddable";
+  const bucketFillToolSelected = activeTool.type === "bucketfill";
+  const stickyNoteToolSelected = activeTool.type === "stickynote";
 
   const { TTDDialogTriggerTunnel } = useTunnels();
 
@@ -106,7 +114,15 @@ export const MobileToolbar = ({ app, setAppState }: MobileToolbarProps) => {
   const showFrameToolOutside = toolbarWidth >= MIN_WIDTH + 3 * ADDITIONAL_WIDTH;
 
   const extraTools: readonly typeof activeTool.type[] = (
-    ["text", "frame", "embeddable", "laser", "magicframe"] as const
+    [
+      "text",
+      "stickynote",
+      "frame",
+      "embeddable",
+      "laser",
+      "bucketfill",
+      "magicframe",
+    ] as const
   ).filter((tool) => {
     if (showTextToolOutside && tool === "text") {
       return false;
@@ -124,14 +140,18 @@ export const MobileToolbar = ({ app, setAppState }: MobileToolbarProps) => {
       ? ImageIcon
       : activeTool.type === "frame"
       ? frameToolIcon
+      : activeTool.type === "stickynote"
+      ? stickyNoteToolIcon
       : activeTool.type === "embeddable"
       ? EmbedIcon
       : activeTool.type === "laser"
       ? laserPointerToolIcon
+      : activeTool.type === "bucketfill"
+      ? bucketFillIcon
       : activeTool.type === "magicframe"
       ? MagicIcon
-      : extraToolsIcon
-    : extraToolsIcon;
+      : DotsIcon
+    : DotsIcon;
 
   const toolProps = { app, activeTool };
 
@@ -151,7 +171,7 @@ export const MobileToolbar = ({ app, setAppState }: MobileToolbarProps) => {
       <SelectionToolPopover {...toolProps} setAppState={setAppState} />
 
       {/* Free Draw */}
-      <FreedrawToolButton {...toolProps} hideShortcut />
+      <FreedrawToolPopover {...toolProps} />
 
       {/* Eraser */}
       <EraserToolButton {...toolProps} hideShortcut />
@@ -246,6 +266,7 @@ export const MobileToolbar = ({ app, setAppState }: MobileToolbarProps) => {
               shortcut={KEYS.T.toLocaleUpperCase()}
               data-testid="toolbar-text"
               selected={activeTool.type === "text"}
+              disabled={isToolButtonDisabled(app, "text")}
             >
               {t("toolBar.text")}
             </DropdownMenu.Item>
@@ -257,10 +278,22 @@ export const MobileToolbar = ({ app, setAppState }: MobileToolbarProps) => {
               icon={ImageIcon}
               data-testid="toolbar-image"
               selected={activeTool.type === "image"}
+              disabled={isToolButtonDisabled(app, "image")}
             >
               {t("toolBar.image")}
             </DropdownMenu.Item>
           )}
+          <DropdownMenu.Item
+            onSelect={() => app.setActiveTool({ type: "stickynote" })}
+            icon={stickyNoteToolIcon}
+            shortcut={KEYS.N.toLocaleUpperCase()}
+            data-testid="toolbar-stickynote"
+            selected={stickyNoteToolSelected}
+            disabled={isToolButtonDisabled(app, "stickynote")}
+          >
+            {t("toolBar.stickynote")}
+          </DropdownMenu.Item>
+
           {!showFrameToolOutside && (
             <DropdownMenu.Item
               onSelect={() => app.setActiveTool({ type: "frame" })}
@@ -268,6 +301,7 @@ export const MobileToolbar = ({ app, setAppState }: MobileToolbarProps) => {
               shortcut={KEYS.F.toLocaleUpperCase()}
               data-testid="toolbar-frame"
               selected={frameToolSelected}
+              disabled={isToolButtonDisabled(app, "frame")}
             >
               {t("toolBar.frame")}
             </DropdownMenu.Item>
@@ -277,8 +311,19 @@ export const MobileToolbar = ({ app, setAppState }: MobileToolbarProps) => {
             icon={EmbedIcon}
             data-testid="toolbar-embeddable"
             selected={embeddableToolSelected}
+            disabled={isToolButtonDisabled(app, "embeddable")}
           >
             {t("toolBar.embeddable")}
+          </DropdownMenu.Item>
+          <DropdownMenu.Item
+            onSelect={() => app.setActiveTool({ type: "autoshape" })}
+            icon={drawShapeToolIcon}
+            shortcut={getToolShortcut("autoshape")}
+            data-testid="toolbar-autoshape"
+            selected={drawShapeToolSelected}
+            disabled={isToolButtonDisabled(app, "autoshape")}
+          >
+            {t("toolBar.autoshape")}
           </DropdownMenu.Item>
           <DropdownMenu.Item
             onSelect={() => app.setActiveTool({ type: "laser" })}
@@ -286,8 +331,19 @@ export const MobileToolbar = ({ app, setAppState }: MobileToolbarProps) => {
             data-testid="toolbar-laser"
             selected={laserToolSelected}
             shortcut={KEYS.K.toLocaleUpperCase()}
+            disabled={isToolButtonDisabled(app, "laser")}
           >
             {t("toolBar.laser")}
+          </DropdownMenu.Item>
+          <DropdownMenu.Item
+            onSelect={() => app.setActiveTool({ type: "bucketfill" })}
+            icon={bucketFillIcon}
+            data-testid="toolbar-bucketfill"
+            selected={bucketFillToolSelected}
+            shortcut={KEYS.B.toLocaleUpperCase()}
+            disabled={isToolButtonDisabled(app, "bucketfill")}
+          >
+            {t("toolBar.bucketfill")}
           </DropdownMenu.Item>
           <div style={{ margin: "6px 0", fontSize: 14, fontWeight: 600 }}>
             Generate
@@ -307,6 +363,7 @@ export const MobileToolbar = ({ app, setAppState }: MobileToolbarProps) => {
                 icon={MagicIcon}
                 data-testid="toolbar-magicframe"
                 badge={<DropdownMenu.Item.Badge>AI</DropdownMenu.Item.Badge>}
+                disabled={isToolButtonDisabled(app, "magicframe")}
               >
                 {t("toolBar.magicframe")}
               </DropdownMenu.Item>

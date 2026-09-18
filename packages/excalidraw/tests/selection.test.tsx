@@ -182,14 +182,17 @@ describe("lasso reselection", () => {
       h.app.setActiveTool({ type: "lasso" });
     });
 
+    // NOTE: the lasso starts inside the common bounds of the selection, and
+    // encloses rectA only (the default box selection mode being "contain")
     Keyboard.withModifierKeys({ ctrl: true, alt: true }, () => {
       mouse.downAt(110, 50);
-      mouse.moveTo(50, -20);
+      mouse.moveTo(110, -50);
 
       expect(h.app.lassoTrail.hasCurrentTrail).toBe(true);
 
-      mouse.moveTo(-20, 50);
-      mouse.moveTo(50, 120);
+      mouse.moveTo(-50, -50);
+      mouse.moveTo(-50, 150);
+      mouse.moveTo(110, 150);
       mouse.moveTo(110, 50);
       mouse.up();
     });
@@ -1277,7 +1280,7 @@ describe("select single element on the scene", () => {
     fireEvent.pointerDown(canvas, { clientX: 40, clientY: 40 });
     fireEvent.pointerUp(canvas);
 
-    expect(renderInteractiveScene).toHaveBeenCalledTimes(10);
+    expect(renderInteractiveScene).toHaveBeenCalledTimes(11);
     expect(renderStaticScene).toHaveBeenCalledTimes(9);
     expect(h.state.selectionElement).toBeNull();
     expect(h.elements.length).toEqual(1);
@@ -1322,7 +1325,7 @@ describe("select single element on the scene", () => {
     fireEvent.pointerDown(canvas, { clientX: 40, clientY: 40 });
     fireEvent.pointerUp(canvas);
 
-    expect(renderInteractiveScene).toHaveBeenCalledTimes(10);
+    expect(renderInteractiveScene).toHaveBeenCalledTimes(11);
     expect(renderStaticScene).toHaveBeenCalledTimes(9);
     expect(h.state.selectionElement).toBeNull();
     expect(h.elements.length).toEqual(1);
@@ -1350,7 +1353,9 @@ describe("tool locking & selection", () => {
         value !== "laser" &&
         // no top-level toolbar button (rendered in the extra-tools dropdown)
         value !== "frame" &&
-        value !== "embeddable"
+        value !== "embeddable" &&
+        value !== "autoshape" &&
+        value !== "bucketfill"
       ) {
         const element = UI.createElement(value);
         expect(h.state.selectedElementIds[element.id]).not.toBe(true);

@@ -1,4 +1,5 @@
 import clsx from "clsx";
+import { useEffect, useState } from "react";
 
 import { KEYS, capitalizeString } from "@excalidraw/common";
 
@@ -6,6 +7,7 @@ import type { PointerType } from "@excalidraw/element/types";
 
 import { trackEvent } from "../analytics";
 import { t } from "../i18n";
+import { getShortcutKey } from "../shortcut";
 
 import { IconButton } from "./IconButton";
 import { ToolPopover } from "./ToolPopover";
@@ -17,14 +19,17 @@ import {
   ArrowIcon,
   LineIcon,
   FreedrawIcon,
+  drawShapeToolIcon,
   TextIcon,
   ImageIcon,
   EraserIcon,
   laserPointerToolIcon,
+  bucketFillIcon,
   LassoIcon,
   handIcon,
   frameToolIcon,
   EmbedIcon,
+  stickyNoteToolIcon,
 } from "./icons";
 
 import type {
@@ -36,8 +41,10 @@ import type {
 
 export type ToolConfig = {
   icon: React.ReactNode;
-  /** letter shortcut(s) — the first one is shown in tooltips */
+  /** letter shortcut(s) — the first one is shown in tooltips and badges */
   letterKey?: string | readonly string[];
+  /** whether `letterKey` requires Shift to be held (e.g. Shift+X) */
+  shiftKey?: boolean;
   numericKey?: string;
   /** whether the tool's shapes can be filled — fills the icon when active */
   fillable?: boolean;
@@ -111,6 +118,10 @@ export const TOOLS = defineTools({
     letterKey: KEYS.T,
     numericKey: KEYS["8"],
   },
+  stickynote: {
+    icon: stickyNoteToolIcon,
+    letterKey: KEYS.N,
+  },
   image: {
     icon: ImageIcon,
     numericKey: KEYS["9"],
@@ -125,12 +136,22 @@ export const TOOLS = defineTools({
     icon: frameToolIcon,
     letterKey: KEYS.F,
   },
+  autoshape: {
+    icon: drawShapeToolIcon,
+    letterKey: KEYS.X,
+    shiftKey: true,
+    fillable: false,
+  },
   embeddable: {
     icon: EmbedIcon,
   },
   laser: {
     icon: laserPointerToolIcon,
     letterKey: KEYS.K,
+  },
+  bucketfill: {
+    icon: bucketFillIcon,
+    letterKey: KEYS.B,
   },
   lasso: {
     icon: LassoIcon,
@@ -149,11 +170,14 @@ export const TOGGLE_TOOLS: readonly (ToolType | "custom")[] = (
 ).filter((type) => TOOLS[type].toggle);
 
 export const getToolLetter = (type: ToolbarToolType) => {
-  const { letterKey } = TOOLS[type];
-  return (
-    letterKey &&
-    capitalizeString(typeof letterKey === "string" ? letterKey : letterKey[0])
+  const { letterKey, shiftKey } = TOOLS[type];
+  if (!letterKey) {
+    return letterKey;
+  }
+  const letter = capitalizeString(
+    typeof letterKey === "string" ? letterKey : letterKey[0],
   );
+  return shiftKey ? getShortcutKey(`Shift+${letter}`) : letter;
 };
 
 /** human-readable shortcut hint, e.g. "R or 2", used in tooltips & aria */
@@ -165,13 +189,22 @@ export const getToolShortcut = (type: ToolbarToolType) => {
     : `${letter || numericKey}`;
 };
 
-export const findShapeByKey = (key: string, app: AppClassProperties) => {
-  // CapsLock-insensitive (the caller excludes modified keypresses, incl.
-  // shift, so a capital letter here means CapsLock)
+export const findShapeByKey = (
+  key: string,
+  app: AppClassProperties,
+  shiftKey: boolean = false,
+) => {
+  // CapsLock-insensitive: the caller excludes every modifier but shift, and
+  // shift is matched explicitly below, so a capital letter on its own means
+  // CapsLock
   const lowerKey = key.toLowerCase();
 
   for (const type of Object.keys(TOOLS) as ToolbarToolType[]) {
-    const { letterKey, numericKey } = TOOLS[type];
+    const { letterKey, numericKey, shiftKey: requiresShift } = TOOLS[type];
+    // shift-bound tools require shift; plain-bound ones require its absence
+    if (shiftKey !== Boolean(requiresShift)) {
+      continue;
+    }
     if (
       (numericKey != null && key === numericKey) ||
       (letterKey &&
@@ -188,6 +221,14 @@ export const findShapeByKey = (key: string, app: AppClassProperties) => {
   }
   return null;
 };
+
+/**
+ * Whether a toolbar entry activating the given tool renders disabled — true
+ * when the active tool is host-controlled (`props.activeTool`) and the entry
+ * doesn't activate the forced tool (`setActiveTool` refuses it).
+ */
+export const isToolButtonDisabled = (app: AppClassProperties, type: string) =>
+  app.props.activeTool != null && app.props.activeTool.type !== type;
 
 export type ToolButtonComponentProps = {
   app: AppClassProperties;
@@ -245,15 +286,21 @@ const createToolButton = (
         type="toggle"
         icon={config.icon}
         checked={activeTool.type === type}
+        disabled={isToolButtonDisabled(app, type)}
         title={shortcut ? `${label} — ${shortcut}` : label}
         keyBindingLabel={
           hideKeyBinding || hideShortcut
             ? undefined
-            : TOOLS[shortcutType].numericKey || getToolLetter(shortcutType)
+            : getToolLetter(shortcutType) || TOOLS[shortcutType].numericKey
         }
         aria-label={label}
         aria-keyshortcuts={shortcut ?? undefined}
         data-testid={`toolbar-${type}`}
+        onPointerDown={(event) => {
+          // a draggable tool can be dragged out onto the canvas; a press that
+          // stays put is still a click (`onSelect`)
+          app.toolDrag.handleButtonPointerDown(type, event.nativeEvent);
+        }}
         onSelect={({ pointerType }) => {
           if (!app.state.penDetected && pointerType === "pen") {
             app.togglePenMode(true);
@@ -286,6 +333,7 @@ export const ArrowToolButton = createToolButton("arrow");
 export const LineToolButton = createToolButton("line");
 export const FreedrawToolButton = createToolButton("freedraw");
 export const TextToolButton = createToolButton("text");
+export const StickyNoteToolButton = createToolButton("stickynote");
 export const ImageToolButton = createToolButton("image");
 export const EraserToolButton = createToolButton("eraser");
 export const FrameToolButton = createToolButton("frame");
@@ -364,6 +412,64 @@ export const SelectionToolPopover = ({
           setAppState({
             preferredSelectionTool: { type, initialized: true },
           });
+        }
+      }}
+      displayedOption={displayedOption}
+    />
+  );
+};
+
+/**
+ * The freedraw ⇄ draw-shape popover used in compact (tablet) and mobile
+ * toolbars. The trigger remembers and displays the most recently used option.
+ */
+export const FreedrawToolPopover = ({
+  app,
+  activeTool,
+}: {
+  app: AppClassProperties;
+  activeTool: UIAppState["activeTool"];
+}) => {
+  const DRAWING_TOOLS = [
+    {
+      type: "freedraw",
+      icon: TOOLS.freedraw.icon,
+      fillable: TOOLS.freedraw.fillable,
+      title: capitalizeString(t("toolBar.freedraw")),
+    },
+    {
+      type: "autoshape",
+      icon: TOOLS.autoshape.icon,
+      fillable: TOOLS.autoshape.fillable,
+      title: capitalizeString(t("toolBar.autoshape")),
+    },
+  ] as const;
+
+  const [lastDrawingTool, setLastDrawingTool] = useState<
+    typeof DRAWING_TOOLS[number]["type"]
+  >(activeTool.type === "autoshape" ? "autoshape" : "freedraw");
+
+  useEffect(() => {
+    if (activeTool.type === "freedraw" || activeTool.type === "autoshape") {
+      setLastDrawingTool(activeTool.type);
+    }
+  }, [activeTool.type]);
+
+  const displayedOption =
+    DRAWING_TOOLS.find((tool) => tool.type === lastDrawingTool) ||
+    DRAWING_TOOLS[0];
+
+  return (
+    <ToolPopover
+      app={app}
+      options={DRAWING_TOOLS}
+      activeTool={activeTool}
+      defaultOption={lastDrawingTool}
+      data-testid="toolbar-freedraw"
+      onToolChange={(type: string) => {
+        if (type === "freedraw" || type === "autoshape") {
+          setLastDrawingTool(type);
+          app.setActiveTool({ type });
         }
       }}
       displayedOption={displayedOption}

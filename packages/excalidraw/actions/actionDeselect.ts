@@ -67,6 +67,7 @@ export const actionDeselect = register({
   trackEvent: false,
   perform: (_elements, appState, _, app) => {
     const activeTool = getNextActiveTool(appState, app);
+    app.cursor.applyForTool(activeTool);
 
     if (appState.editingGroupId) {
       const nonDeletedElements = app.scene.getNonDeletedElements();
@@ -103,6 +104,7 @@ export const actionDeselect = register({
           selectionElement: null,
           showHyperlinkPopup: false,
           suggestedBinding: null,
+          hoveredArrowTextAnchor: null,
           frameToHighlight: null,
         },
         captureUpdate: CaptureUpdateAction.IMMEDIATELY,
@@ -121,6 +123,7 @@ export const actionDeselect = register({
         selectionElement: null,
         showHyperlinkPopup: false,
         suggestedBinding: null,
+        hoveredArrowTextAnchor: null,
         frameToHighlight: null,
       },
       captureUpdate: CaptureUpdateAction.IMMEDIATELY,

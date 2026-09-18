@@ -1,5 +1,5 @@
 import { simplify } from "points-on-curve";
-import { getStroke } from "perfect-freehand";
+import { getStroke, getStrokePoints } from "perfect-freehand";
 import { LaserPointer } from "@excalidraw/laser-pointer";
 
 import {
@@ -979,6 +979,9 @@ const _generateElementShape = (
 
       return shapes;
     }
+    // sticky notes are painted directly (canvas + SVG) from
+    // `getStickyNoteRenderPoints`, never through roughjs
+    case "stickynote":
     case "frame":
     case "magicframe":
     case "text":
@@ -1073,6 +1076,7 @@ export const getElementShape = <Point extends GlobalPoint | LocalPoint>(
 ): GeometricShape<Point> => {
   switch (element.type) {
     case "rectangle":
+    case "stickynote":
     case "diamond":
     case "frame":
     case "magicframe":
@@ -1252,6 +1256,26 @@ export const getFreedrawOutlinePoints = (
     ? getConstantWidthFreedrawOutline(element)
     : getVariableWidthFreedrawOutline(element);
 };
+
+/**
+ * The streamline-smoothed centerline the freedraw stroke is rendered
+ * around, in element-local coordinates. Boundary-sensitive consumers (e.g.
+ * bucket fill) should use this instead of `element.points`: raw input
+ * points can sit 20px+ apart and the rendered stroke is smoothed between
+ * them, so raw chords visibly deviate from what's on screen.
+ *
+ * Constant-width ("laser geometry") strokes technically smooth via
+ * `LaserPointer` instead; the perfect-freehand centerline with the same
+ * `streamline` is a close approximation the stroke width hides.
+ */
+export const getFreedrawStrokeCenterPoints = (
+  element: ExcalidrawFreeDrawElement,
+): [number, number][] =>
+  getStrokePoints(element.points as unknown as number[][], {
+    size: element.strokeWidth * VARIABLE_WIDTH_FREEDRAW.SIZE_FACTOR,
+    streamline: getFreedrawStreamline(element),
+    last: true,
+  }).map((strokePoint) => strokePoint.point as [number, number]);
 
 const med = (A: number[], B: number[]) => {
   return [(A[0] + B[0]) / 2, (A[1] + B[1]) / 2];

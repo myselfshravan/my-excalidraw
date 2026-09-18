@@ -14,27 +14,33 @@ import { PenModeButton } from "./PenModeButton";
 import Stack from "./Stack";
 import DropdownMenu from "./dropdownMenu/DropdownMenu";
 import {
+  drawShapeToolIcon,
   EmbedIcon,
-  extraToolsIcon,
   frameToolIcon,
+  ImageIcon,
   LassoIcon,
   laserPointerToolIcon,
+  bucketFillIcon,
   MagicIcon,
   mermaidLogoIcon,
+  DotsIcon,
 } from "./icons";
 import {
   ArrowToolButton,
   DiamondToolButton,
   EllipseToolButton,
   EraserToolButton,
+  FreedrawToolPopover,
   FreedrawToolButton,
+  getToolShortcut,
   HandToolButton,
-  ImageToolButton,
+  isToolButtonDisabled,
   LassoToolButton,
   LineToolButton,
   RectangleToolButton,
   SelectionToolButton,
   SelectionToolPopover,
+  StickyNoteToolButton,
   TextToolButton,
 } from "./Tools";
 
@@ -49,17 +55,22 @@ const ExtraToolsDropdown = ({
   app,
   activeTool,
   setAppState,
+  UIOptions,
 }: {
   app: AppClassProperties;
   activeTool: UIAppState["activeTool"];
   setAppState: React.Component<any, AppState>["setState"];
+  UIOptions: AppProps["UIOptions"];
 }) => {
   const [isExtraToolsMenuOpen, setIsExtraToolsMenuOpen] = useState(false);
   const isFullStylesPanel = useStylesPanelMode() === "full";
   const { TTDDialogTriggerTunnel } = useTunnels();
 
+  const imageToolSelected = activeTool.type === "image";
   const frameToolSelected = activeTool.type === "frame";
+  const drawShapeToolSelected = activeTool.type === "autoshape";
   const laserToolSelected = activeTool.type === "laser";
+  const bucketFillToolSelected = activeTool.type === "bucketfill";
   const lassoToolSelected =
     isFullStylesPanel &&
     activeTool.type === "lasso" &&
@@ -71,9 +82,12 @@ const ExtraToolsDropdown = ({
       <DropdownMenu.Trigger
         className={clsx("App-toolbar__extra-tools-trigger", {
           "App-toolbar__extra-tools-trigger--selected":
+            imageToolSelected ||
             frameToolSelected ||
             embeddableToolSelected ||
+            (isFullStylesPanel && drawShapeToolSelected) ||
             lassoToolSelected ||
+            bucketFillToolSelected ||
             // in collab we're already highlighting the laser button
             // outside toolbar, so let's not highlight extra-tools button
             // on top of it
@@ -85,27 +99,46 @@ const ExtraToolsDropdown = ({
         }}
         title={t("toolBar.extraTools")}
       >
-        {frameToolSelected
+        {imageToolSelected
+          ? ImageIcon
+          : frameToolSelected
           ? frameToolIcon
           : embeddableToolSelected
           ? EmbedIcon
+          : isFullStylesPanel && drawShapeToolSelected
+          ? drawShapeToolIcon
           : laserToolSelected && !app.props.isCollaborating
           ? laserPointerToolIcon
           : lassoToolSelected
           ? LassoIcon
-          : extraToolsIcon}
+          : bucketFillToolSelected
+          ? bucketFillIcon
+          : DotsIcon}
       </DropdownMenu.Trigger>
       <DropdownMenu.Content
         onClickOutside={() => setIsExtraToolsMenuOpen(false)}
         onSelect={() => setIsExtraToolsMenuOpen(false)}
         className="App-toolbar__extra-tools-dropdown"
       >
+        {UIOptions.tools?.image !== false && (
+          <DropdownMenu.Item
+            onSelect={() => app.setActiveTool({ type: "image" })}
+            icon={ImageIcon}
+            shortcut={KEYS["9"]}
+            data-testid="toolbar-image"
+            selected={imageToolSelected}
+            disabled={isToolButtonDisabled(app, "image")}
+          >
+            {t("toolBar.image")}
+          </DropdownMenu.Item>
+        )}
         <DropdownMenu.Item
           onSelect={() => app.setActiveTool({ type: "frame" })}
           icon={frameToolIcon}
           shortcut={KEYS.F.toLocaleUpperCase()}
           data-testid="toolbar-frame"
           selected={frameToolSelected}
+          disabled={isToolButtonDisabled(app, "frame")}
         >
           {t("toolBar.frame")}
         </DropdownMenu.Item>
@@ -114,8 +147,19 @@ const ExtraToolsDropdown = ({
           icon={EmbedIcon}
           data-testid="toolbar-embeddable"
           selected={embeddableToolSelected}
+          disabled={isToolButtonDisabled(app, "embeddable")}
         >
           {t("toolBar.embeddable")}
+        </DropdownMenu.Item>
+        <DropdownMenu.Item
+          onSelect={() => app.setActiveTool({ type: "autoshape" })}
+          icon={drawShapeToolIcon}
+          shortcut={getToolShortcut("autoshape")}
+          data-testid="toolbar-autoshape"
+          selected={drawShapeToolSelected}
+          disabled={isToolButtonDisabled(app, "autoshape")}
+        >
+          {t("toolBar.autoshape")}
         </DropdownMenu.Item>
         <DropdownMenu.Item
           onSelect={() => app.setActiveTool({ type: "laser" })}
@@ -123,8 +167,19 @@ const ExtraToolsDropdown = ({
           data-testid="toolbar-laser"
           selected={laserToolSelected}
           shortcut={KEYS.K.toLocaleUpperCase()}
+          disabled={isToolButtonDisabled(app, "laser")}
         >
           {t("toolBar.laser")}
+        </DropdownMenu.Item>
+        <DropdownMenu.Item
+          onSelect={() => app.setActiveTool({ type: "bucketfill" })}
+          icon={bucketFillIcon}
+          data-testid="toolbar-bucketfill"
+          selected={bucketFillToolSelected}
+          shortcut={KEYS.B.toLocaleUpperCase()}
+          disabled={isToolButtonDisabled(app, "bucketfill")}
+        >
+          {t("toolBar.bucketfill")}
         </DropdownMenu.Item>
         {isFullStylesPanel && (
           <DropdownMenu.Item
@@ -132,6 +187,7 @@ const ExtraToolsDropdown = ({
             icon={LassoIcon}
             data-testid="toolbar-lasso"
             selected={lassoToolSelected}
+            disabled={isToolButtonDisabled(app, "lasso")}
           >
             {t("toolBar.lasso")}
           </DropdownMenu.Item>
@@ -153,6 +209,7 @@ const ExtraToolsDropdown = ({
             icon={MagicIcon}
             data-testid="toolbar-magicframe"
             badge={<DropdownMenu.Item.Badge>AI</DropdownMenu.Item.Badge>}
+            disabled={isToolButtonDisabled(app, "magicframe")}
           >
             {t("toolBar.magicframe")}
           </DropdownMenu.Item>
@@ -213,13 +270,22 @@ export const Toolbar = ({
             penDetected={appState.penDetected}
           />
         )}
-        <LockButton
-          checked={appState.activeTool.locked}
-          onChange={onLockToggle}
-          title={t("toolBar.lock")}
-        />
+        {app.props.activeTool == null && (
+          <>
+            <LockButton
+              checked={appState.activeTool.locked}
+              onChange={onLockToggle}
+              title={t("toolBar.lock")}
+              // the active tool — including its lock state — is host-controlled
+              disabled={app.props.activeTool != null}
+            />
 
-        <div className="App-toolbar__divider" />
+            <div
+              className="App-toolbar__divider"
+              style={{ marginRight: "0.25rem" }}
+            />
+          </>
+        )}
 
         <HandToolButton {...toolProps} hideKeyBinding />
         {isCompactStylesPanel ? (
@@ -234,17 +300,25 @@ export const Toolbar = ({
         <EllipseToolButton {...toolProps} />
         <ArrowToolButton {...toolProps} />
         <LineToolButton {...toolProps} />
-        <FreedrawToolButton {...toolProps} />
+        {isCompactStylesPanel ? (
+          <FreedrawToolPopover {...toolProps} />
+        ) : (
+          <FreedrawToolButton {...toolProps} />
+        )}
         <TextToolButton {...toolProps} />
-        {UIOptions.tools?.image !== false && <ImageToolButton {...toolProps} />}
+        <StickyNoteToolButton {...toolProps} />
         <EraserToolButton {...toolProps} />
 
-        <div className="App-toolbar__divider" />
+        <div
+          className="App-toolbar__divider"
+          style={{ marginLeft: "0.25rem" }}
+        />
 
         <ExtraToolsDropdown
           app={app}
           activeTool={activeTool}
           setAppState={setAppState}
+          UIOptions={UIOptions}
         />
       </Stack.Row>
     </Island>
