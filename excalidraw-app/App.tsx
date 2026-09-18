@@ -603,13 +603,19 @@ const ExcalidrawWrapper = () => {
         sceneVersionRef.current,
         `Restored version ${version}`,
       );
-      const signature = getSceneVersion(elements);
-      lastSavedSignatureRef.current = signature;
-      latestSignatureRef.current = signature;
       excalidrawAPI.updateScene({
         elements,
         captureUpdate: CaptureUpdateAction.IMMEDIATELY,
       });
+      // Baseline from what Excalidraw actually holds, not from the snapshot
+      // payload: `restore` normalizes elements on the way in, so hashing the
+      // payload would leave a phantom difference and every restore would be
+      // followed by a redundant "Edited in browser" version.
+      const signature = getSceneVersion(
+        excalidrawAPI.getSceneElementsIncludingDeleted(),
+      );
+      lastSavedSignatureRef.current = signature;
+      latestSignatureRef.current = signature;
       setRemoteChange(null);
     },
     [excalidrawAPI],
