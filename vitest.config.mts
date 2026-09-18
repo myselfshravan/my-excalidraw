@@ -1,6 +1,6 @@
 import path from "path";
 
-import { defineConfig } from "vitest/config";
+import { defaultExclude, defineConfig } from "vitest/config";
 
 export default defineConfig({
   resolve: {
@@ -82,6 +82,10 @@ export default defineConfig({
     setupFiles: ["./setupTests.ts"],
     globals: true,
     environment: "jsdom",
+    // mcp-server is a standalone Node package with its own `npm test` built on
+    // node:test, and its suites import from its compiled build/ output. Vitest
+    // must not try to collect them.
+    exclude: [...defaultExclude, "mcp-server/**"],
     // don't list skipped tests in the failure tree — keeps output readable
     hideSkippedTests: true,
     coverage: {
