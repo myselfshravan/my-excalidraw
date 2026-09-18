@@ -9,6 +9,7 @@ import {
   createRectangle,
   createText,
   ensureTextElementBounds,
+  reanchorArrow,
   type BindableElement,
 } from "./elements.js";
 import {
@@ -457,6 +458,8 @@ export const registerTools = (server: McpServer) => {
       const byId = new Map<string, any>(
         scene.elements.map((el: any) => [el.id, el]),
       );
+      // Arrows bound to a shape whose geometry we change need re-routing.
+      const movedShapeIds = new Set<string>();
 
       const missing = updates.filter((u) => !byId.has(u.id)).map((u) => u.id);
       if (missing.length) {
@@ -504,10 +507,41 @@ export const registerTools = (server: McpServer) => {
           Object.assign(el, ensureTextElementBounds(el));
         }
 
+        if (
+          dx !== undefined ||
+          dy !== undefined ||
+          patch.x !== undefined ||
+          patch.y !== undefined ||
+          patch.width !== undefined ||
+          patch.height !== undefined
+        ) {
+          movedShapeIds.add(el.id);
+        }
+
         // Excalidraw uses these to detect a change on load / during sync.
         el.version = (el.version ?? 1) + 1;
         el.versionNonce = Math.floor(Math.random() * 2 ** 31);
         el.updated = Date.now();
+      }
+
+      // Re-route every arrow bound to something that moved, so it still meets
+      // the shape's edge instead of dangling or ending up inside it.
+      const rerouted: string[] = [];
+      if (movedShapeIds.size) {
+        for (const el of scene.elements as any[]) {
+          if (el.type !== "arrow") {
+            continue;
+          }
+          const touches =
+            movedShapeIds.has(el.startBinding?.elementId) ||
+            movedShapeIds.has(el.endBinding?.elementId);
+          if (touches && reanchorArrow(el, scene.elements)) {
+            el.version = (el.version ?? 1) + 1;
+            el.versionNonce = Math.floor(Math.random() * 2 ** 31);
+            el.updated = Date.now();
+            rerouted.push(el.id);
+          }
+        }
       }
 
       await saveScene(name, scene, shareId, encryptionKey);
@@ -515,6 +549,7 @@ export const registerTools = (server: McpServer) => {
         ok: true,
         name,
         updated: updates.map((u) => u.id),
+        ...(rerouted.length ? { reroutedArrows: rerouted } : {}),
         elementCount: scene.elements.length,
       });
     },

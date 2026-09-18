@@ -80,7 +80,7 @@ Style fields available on every element: `strokeColor`, `backgroundColor`, `fill
 }
 ```
 
-`x`/`y` set an absolute position, `dx`/`dy` shift by a delta. Text elements are re-measured when their `text` or `fontSize` changes and no explicit `width`/`height` is given. If any id in the batch is unknown, nothing is written.
+`x`/`y` set an absolute position, `dx`/`dy` shift by a delta. Moving or resizing a shape re-routes any arrow bound to it, so the arrow still meets the shape's edge (Excalidraw only does this during interactive drags, not for a scene loaded from JSON). Text elements are re-measured when their `text` or `fontSize` changes and no explicit `width`/`height` is given. If any id in the batch is unknown, nothing is written.
 
 ## Setup (local stdio)
 

@@ -245,6 +245,63 @@ const anchorOnShape = (
 };
 
 /**
+ * Recomputes a bound arrow's endpoints from its bindings' CURRENT geometry, so
+ * an arrow still meets the shapes' edges after one of them is moved or resized.
+ * Excalidraw only re-routes bindings during interactive drags; a scene loaded
+ * from JSON keeps whatever points were stored, so a programmatic move has to do
+ * this itself or the arrow ends up detached from (or buried inside) the shape.
+ *
+ * A free end keeps its absolute position. Returns false if there was nothing to
+ * re-anchor, or if the arrow has intermediate points — reducing a multi-point
+ * arrow to a straight line would discard the shape the user drew.
+ */
+export const reanchorArrow = (
+  arrow: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    points: number[][];
+    startBinding: { elementId: string } | null;
+    endBinding: { elementId: string } | null;
+  },
+  elements: BindableElement[],
+): boolean => {
+  if (arrow.points.length !== 2) {
+    return false;
+  }
+  const find = (id?: string) =>
+    id ? elements.find((e) => e.id === id) ?? null : null;
+  const startEl = find(arrow.startBinding?.elementId);
+  const endEl = find(arrow.endBinding?.elementId);
+  if (!startEl && !endEl) {
+    return false;
+  }
+
+  const [first, last] = arrow.points;
+  const absStart = { x: arrow.x + first[0], y: arrow.y + first[1] };
+  const absEnd = { x: arrow.x + last[0], y: arrow.y + last[1] };
+
+  // Aim each bound end at the other end's centre (or its fixed free point).
+  const newStart = startEl
+    ? anchorOnShape(startEl, endEl ? centerOf(endEl) : absEnd)
+    : absStart;
+  const newEnd = endEl
+    ? anchorOnShape(endEl, startEl ? centerOf(startEl) : absStart)
+    : absEnd;
+
+  arrow.x = newStart.x;
+  arrow.y = newStart.y;
+  arrow.points = [
+    [0, 0],
+    [newEnd.x - newStart.x, newEnd.y - newStart.y],
+  ];
+  arrow.width = Math.abs(newEnd.x - newStart.x);
+  arrow.height = Math.abs(newEnd.y - newStart.y);
+  return true;
+};
+
+/**
  * Records the arrow on each shape it binds to. Excalidraw's bindings are
  * two-way: the arrow names the shape via start/endBinding, and the shape must
  * name the arrow in `boundElements`, or dragging the shape leaves the arrow

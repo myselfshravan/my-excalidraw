@@ -6,6 +6,7 @@ import {
   createArrow,
   createLine,
   createRectangle,
+  reanchorArrow,
 } from "../build/elements.js";
 
 test("line points are rebased onto the element origin", () => {
@@ -158,4 +159,61 @@ test("attaching preserves existing boundElements entries", () => {
     { id: "existing-text", type: "text" },
     { id: arrow.id, type: "arrow" },
   ]);
+});
+
+test("re-anchors a bound arrow after its shape moves", () => {
+  const a = createRectangle({ x: 0, y: 0, width: 100, height: 100 });
+  const b = createRectangle({ x: 300, y: 0, width: 100, height: 100 });
+  const shapes = [a, b];
+  const arrow = createArrow(
+    { from: { elementId: a.id }, to: { elementId: b.id } },
+    shapes,
+  );
+
+  assert.equal(arrow.x, 108);
+
+  // Move `a` right by 40; the arrow must start from its new edge.
+  a.x += 40;
+  assert.equal(reanchorArrow(arrow, [...shapes, arrow]), true);
+
+  assert.deepEqual({ x: arrow.x, y: arrow.y }, { x: 148, y: 50 });
+  assert.deepEqual(arrow.points, [
+    [0, 0],
+    [144, 0],
+  ]);
+  assert.equal(arrow.width, 144);
+});
+
+test("a free end keeps its absolute position when re-anchoring", () => {
+  const shape = createRectangle({ x: 0, y: 0, width: 100, height: 100 });
+  const arrow = createArrow(
+    { from: { elementId: shape.id }, to: { x: 400, y: 50 } },
+    [shape],
+  );
+
+  shape.y += 100;
+  reanchorArrow(arrow, [shape, arrow]);
+
+  // The unbound end is still exactly where it was asked to be.
+  const endX = arrow.x + arrow.points[1][0];
+  const endY = arrow.y + arrow.points[1][1];
+  assert.deepEqual({ x: Math.round(endX), y: Math.round(endY) }, { x: 400, y: 50 });
+});
+
+test("re-anchoring leaves unbound and multi-point arrows alone", () => {
+  const loose = createArrow({ from: { x: 0, y: 0 }, to: { x: 10, y: 10 } });
+  assert.equal(reanchorArrow(loose, []), false);
+
+  const shape = createRectangle({ x: 0, y: 0, width: 100, height: 100 });
+  const multi = createArrow(
+    { from: { elementId: shape.id }, to: { x: 400, y: 50 } },
+    [shape],
+  );
+  multi.points = [
+    [0, 0],
+    [50, 80],
+    [200, 0],
+  ];
+  assert.equal(reanchorArrow(multi, [shape]), false);
+  assert.equal(multi.points.length, 3);
 });
