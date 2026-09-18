@@ -59,11 +59,13 @@ const tsToMs = (ts: unknown): number | null => {
 };
 
 const snapToWorkspace = (
-  snap: { id: string; data: () => any; exists: () => boolean } | {
-    id: string;
-    data: () => any;
-    exists?: never;
-  },
+  snap:
+    | { id: string; data: () => any; exists: () => boolean }
+    | {
+        id: string;
+        data: () => any;
+        exists?: never;
+      },
 ): Workspace | null => {
   if ("exists" in snap && typeof snap.exists === "function" && !snap.exists()) {
     return null;
@@ -84,7 +86,10 @@ const snapToWorkspace = (
 
 export const listWorkspaces = async (): Promise<Workspace[]> => {
   const firestore = getAppFirestore();
-  const q = query(collection(firestore, COLLECTION), orderBy("updatedAt", "desc"));
+  const q = query(
+    collection(firestore, COLLECTION),
+    orderBy("updatedAt", "desc"),
+  );
   const snap = await getDocs(q);
   return snap.docs
     .map((d) => snapToWorkspace(d))
@@ -251,9 +256,7 @@ export const listWorkspacesWithLocalOrder = async (): Promise<Workspace[]> => {
     const results = await Promise.all(
       ids.map(async (id) => {
         try {
-          return snapToWorkspace(
-            await getDoc(doc(firestore, COLLECTION, id)),
-          );
+          return snapToWorkspace(await getDoc(doc(firestore, COLLECTION, id)));
         } catch {
           return null;
         }
