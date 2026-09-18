@@ -452,6 +452,10 @@ const ExcalidrawWrapper = () => {
   // all fire onChange — from re-uploading an unchanged scene.
   const lastSavedSignatureRef = useRef<number | null>(null);
   const latestSignatureRef = useRef<number | null>(null);
+  // Versions this tab is writing. The Firestore snapshot for our own commit
+  // can arrive before the await resolves, so without this the tab notices its
+  // own write and reports itself as a conflicting editor.
+  const ownVersionsRef = useRef<Set<number>>(new Set());
   const [activeShareId, setActiveShareId] = useState<string | null>(null);
   const [remoteChange, setRemoteChange] = useState<{
     version: number;
@@ -504,16 +508,19 @@ const ExcalidrawWrapper = () => {
     try {
       const data = await importFromBackend(link.id, link.key);
       const elements = data.elements ?? [];
-      // Set the baseline before updateScene so the resulting onChange sees an
-      // unchanged signature and doesn't schedule a save of what we just read.
-      const signature = getSceneVersion(elements as any);
-      lastSavedSignatureRef.current = signature;
-      latestSignatureRef.current = signature;
       sceneVersionRef.current = await getCurrentSceneVersion(link.id);
       excalidrawAPI.updateScene({
         elements,
         captureUpdate: CaptureUpdateAction.IMMEDIATELY,
       });
+      // Baseline from the scene Excalidraw actually holds — `restore`
+      // normalizes elements, so the payload's own signature would differ and
+      // the next onChange would re-upload what we just read.
+      const signature = getSceneVersion(
+        excalidrawAPI.getSceneElementsIncludingDeleted(),
+      );
+      lastSavedSignatureRef.current = signature;
+      latestSignatureRef.current = signature;
       setRemoteChange(null);
     } catch (error) {
       console.error("reload from remote failed", error);
@@ -531,6 +538,7 @@ const ExcalidrawWrapper = () => {
     sceneVersionRef.current = await getCurrentSceneVersion(link.id);
     const elements = excalidrawAPI.getSceneElementsIncludingDeleted();
     try {
+      ownVersionsRef.current.add(sceneVersionRef.current + 1);
       sceneVersionRef.current = await updateShareLinkScene(
         link.id,
         link.key,
@@ -562,6 +570,7 @@ const ExcalidrawWrapper = () => {
       }
       const elements = snapshot.elements ?? [];
       sceneVersionRef.current = await getCurrentSceneVersion(link.id);
+      ownVersionsRef.current.add(sceneVersionRef.current + 1);
       sceneVersionRef.current = await updateShareLinkScene(
         link.id,
         link.key,
@@ -591,6 +600,11 @@ const ExcalidrawWrapper = () => {
       return;
     }
     return watchSceneVersion(activeShareId, (version, updatedBy) => {
+      if (ownVersionsRef.current.has(version)) {
+        ownVersionsRef.current.delete(version);
+        sceneVersionRef.current = Math.max(sceneVersionRef.current, version);
+        return;
+      }
       if (version <= sceneVersionRef.current) {
         return;
       }
@@ -996,6 +1010,7 @@ const ExcalidrawWrapper = () => {
             return;
           }
           try {
+            ownVersionsRef.current.add(sceneVersionRef.current + 1);
             sceneVersionRef.current = await updateShareLinkScene(
               link.id,
               link.key,
