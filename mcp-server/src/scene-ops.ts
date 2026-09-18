@@ -1,5 +1,6 @@
 // High-level scene mutations: fetch -> decrypt -> mutate -> encrypt -> upload.
-// Used by both the raw `update_workspace` tool and the per-element helpers.
+// Every scene write pays this full round-trip, which is why the tools batch
+// multiple element changes into a single call rather than one call per element.
 
 import { getWorkspace, touchWorkspace } from "./registry.js";
 import {
@@ -25,7 +26,9 @@ const emptyScene = (): Scene => ({
   appState: {},
 });
 
-export const loadScene = async (workspaceName: string): Promise<{
+export const loadScene = async (
+  workspaceName: string,
+): Promise<{
   scene: Scene;
   shareId: string;
   encryptionKey: string;

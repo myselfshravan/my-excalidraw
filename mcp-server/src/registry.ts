@@ -10,9 +10,10 @@ export type WorkspaceEntry = {
   updatedAt: number | null;
 };
 
-const collection = () => db.collection("mcp_workspaces");
+const collection = () => db().collection("mcp_workspaces");
 
-const docId = (name: string) => name.toLowerCase().replace(/[^a-z0-9-_]+/g, "-");
+const docId = (name: string) =>
+  name.toLowerCase().replace(/[^a-z0-9-_]+/g, "-");
 
 export const parseShareLink = (
   url: string,
@@ -75,13 +76,18 @@ export const renameWorkspace = async (
   // Doc IDs are derived from the name — moving the entry requires write-new
   // then delete-old.
   const newDocId = docId(newName);
-  await collection().doc(newDocId).set({
-    name: newName,
-    shareId: fields.shareId,
-    encryptionKey: fields.encryptionKey,
-    createdAt: FieldValue.serverTimestamp(),
-    updatedAt: FieldValue.serverTimestamp(),
-  });
+  const previous = await collection().doc(docId(currentName)).get();
+  await collection()
+    .doc(newDocId)
+    .set({
+      name: newName,
+      shareId: fields.shareId,
+      encryptionKey: fields.encryptionKey,
+      // Carry the original creation time across the move; a plain
+      // serverTimestamp() here would make every rename look like a fresh entry.
+      createdAt: previous.data()?.createdAt ?? FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    });
   if (docId(currentName) !== newDocId) {
     await collection().doc(docId(currentName)).delete();
   }
@@ -90,9 +96,11 @@ export const renameWorkspace = async (
 };
 
 export const touchWorkspace = async (name: string): Promise<void> => {
-  await collection().doc(docId(name)).update({
-    updatedAt: FieldValue.serverTimestamp(),
-  });
+  // `set`+merge rather than `update`: the scene write has already succeeded by
+  // this point, so a missing registry doc must not turn it into a failure.
+  await collection()
+    .doc(docId(name))
+    .set({ updatedAt: FieldValue.serverTimestamp() }, { merge: true });
 };
 
 const readEntry = (

@@ -77,17 +77,13 @@ export const encryptScenePayload = async (
   const encodingMetadataBuffer = new TextEncoder().encode(
     JSON.stringify(fileInfo),
   );
-  const contentsMetadataBuffer = new TextEncoder().encode(
-    JSON.stringify(null),
-  );
+  const contentsMetadataBuffer = new TextEncoder().encode(JSON.stringify(null));
   const dataBuffer = new TextEncoder().encode(sceneJSON);
 
   const innerConcat = concatBuffers(contentsMetadataBuffer, dataBuffer);
   const deflated = deflate(innerConcat);
 
-  const iv = globalThis.crypto.getRandomValues(
-    new Uint8Array(IV_LENGTH_BYTES),
-  );
+  const iv = globalThis.crypto.getRandomValues(new Uint8Array(IV_LENGTH_BYTES));
   const key = await importKey(encryptionKey, "encrypt");
   const encrypted = new Uint8Array(
     await globalThis.crypto.subtle.encrypt(
@@ -118,7 +114,8 @@ export const decryptScenePayload = async (
     ),
   );
   const inflated = inflate(decrypted);
-  const [_contentsMetadataBuffer, contentsBuffer] = splitBuffers(inflated);
+  // First chunk is the contents metadata (always `null` for scenes); skip it.
+  const [, contentsBuffer] = splitBuffers(inflated);
   return new TextDecoder().decode(contentsBuffer);
 };
 
@@ -149,7 +146,7 @@ export const generateShareId = (): string => {
 const sceneStoragePath = (id: string) => `files/shareLinks/${id}/scene`;
 
 export const downloadScene = async (id: string): Promise<Uint8Array> => {
-  const [data] = await bucket.file(sceneStoragePath(id)).download();
+  const [data] = await bucket().file(sceneStoragePath(id)).download();
   return new Uint8Array(data);
 };
 
@@ -157,13 +154,15 @@ export const uploadScene = async (
   id: string,
   buffer: Uint8Array,
 ): Promise<void> => {
-  await bucket.file(sceneStoragePath(id)).save(Buffer.from(buffer), {
-    contentType: "application/octet-stream",
-    metadata: {
-      // Scene blobs are mutable (each edit overwrites the same path), so they
-      // must revalidate on every request. A long max-age here would let stale
-      // scenes linger in the browser/edge cache.
-      cacheControl: "no-cache, max-age=0, must-revalidate",
-    },
-  });
+  await bucket()
+    .file(sceneStoragePath(id))
+    .save(Buffer.from(buffer), {
+      contentType: "application/octet-stream",
+      metadata: {
+        // Scene blobs are mutable (each edit overwrites the same path), so they
+        // must revalidate on every request. A long max-age here would let stale
+        // scenes linger in the browser/edge cache.
+        cacheControl: "no-cache, max-age=0, must-revalidate",
+      },
+    });
 };
