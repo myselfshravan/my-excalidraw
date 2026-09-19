@@ -865,10 +865,21 @@ const ExcalidrawWrapper = () => {
           const localDataState = importFromLocalStorage();
           const username = importUsernameFromLocalStorage();
           setLangCode(getPreferredLanguage());
-          excalidrawAPI.updateScene({
-            ...localDataState,
-            captureUpdate: CaptureUpdateAction.NEVER,
-          });
+          // localStorage holds ONE scene for the whole origin, but in this
+          // fork every tab can be a different workspace. Adopting it here
+          // would overwrite this tab's workspace with whichever workspace
+          // another tab saved last — and auto-save would then persist that
+          // into THIS workspace's blob, destroying it.
+          //
+          // Upstream is safe doing this because all tabs show the same
+          // document. A workspace tab gets its cross-tab updates from
+          // watchSceneVersion instead, which is keyed to its own share link.
+          if (!shareLinkRef.current) {
+            excalidrawAPI.updateScene({
+              ...localDataState,
+              captureUpdate: CaptureUpdateAction.NEVER,
+            });
+          }
           LibraryIndexedDBAdapter.load().then((data) => {
             if (data) {
               excalidrawAPI.updateLibrary({
